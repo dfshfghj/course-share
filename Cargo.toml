@@ -1,0 +1,28 @@
+[package]
+name = "course-share"
+version = "0.1.0"
+edition = "2021"
+description = "PKU teaching-network replay browser and sharing plaza"
+license = "MIT"
+
+[dependencies]
+gpui-kit = "=0.7.3"
+gpui-component = "=0.7.3"
+anyhow = "1"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "5"
+rand = "0.8"
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "brotli", "deflate", "gzip", "json", "native-tls"] }
+rsa = { version = "0.9", features = ["pem", "sha2"] }
+scraper = "0.24"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
