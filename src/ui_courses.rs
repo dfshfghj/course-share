@@ -95,6 +95,7 @@ impl AppState {
         }
 
         let mut rows = Vec::new();
+        groups.sort_by(|(a, _), (b, _)| term_order(b).cmp(&term_order(a)));
         for (term, courses) in groups {
             let collapsed = self.collapsed_terms.contains(&term);
             rows.push(SidebarRow::Group {
@@ -666,5 +667,102 @@ impl AppState {
                 this.download_replay(replay_for_download.clone(), window, cx);
             })))
             .into_any_element()
+    }
+}
+
+fn term_order(term: &str) -> (i32, i32) {
+    static RANGE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"(\d{2,4})\s*[-–—~至]\s*(\d{2,4})").unwrap()
+    });
+    static YEAR: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"(?:19|20)\d{2}").unwrap());
+    static SHORT_YEAR: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"^\s*(\d{2})").unwrap());
+    static SEMESTER: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"第\s*([1-3一二三])\s*学期").unwrap()
+    });
+
+    let semester = || {
+        if term.contains('秋') {
+            1
+        } else if term.contains('春') {
+            2
+        } else if term.contains('夏') {
+            3
+        } else if let Some(captured) = SEMESTER.captures(term) {
+            match &captured[1] {
+                "1" | "一" => 1,
+                "2" | "二" => 2,
+                "3" | "三" => 3,
+                _ => 0,
+            }
+        } else {
+            0
+        }
+    };
+
+    if let Some(captured) = RANGE.captures(term) {
+        let start = normalize_year(&captured[1]);
+        let mut end = normalize_year(&captured[2]);
+        if end <= start {
+            end += 100;
+        }
+        return (end, semester());
+    }
+
+    if let Some(years) = YEAR.find(term) {
+        let year = years.as_str().parse::<i32>().unwrap_or(0);
+        if term.contains('秋') {
+            return (year + 1, 1);
+        }
+        return (year, semester());
+    }
+
+    if let Some(captured) = SHORT_YEAR.captures(term) {
+        let year = normalize_year(&captured[1]);
+        if term.contains('秋') {
+            return (year + 1, 1);
+        }
+        return (year, semester());
+    }
+
+    (0, 0)
+}
+
+fn normalize_year(value: &str) -> i32 {
+    let year = value.trim().parse::<i32>().unwrap_or(0);
+    if year < 100 {
+        2000 + year
+    } else {
+        year
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::term_order;
+
+    #[test]
+    fn orders_terms_from_newest_to_oldest() {
+        let mut terms = vec![
+            "24-25学年第2学期",
+            "25-26学年第1学期",
+            "2026春",
+            "2025秋",
+            "未知学期",
+        ];
+        terms.sort_by(|a, b| term_order(b).cmp(&term_order(a)));
+        assert_eq!(terms[0], "2026春");
+        assert_eq!(terms[terms.len() - 1], "未知学期");
+        let old = terms.iter().position(|t| *t == "24-25学年第2学期").unwrap();
+        let unknown = terms.iter().position(|t| *t == "未知学期").unwrap();
+        assert!(old < unknown);
+    }
+
+    #[test]
+    fn treats_spring_as_newer_than_fall_in_same_academic_year() {
+        assert!(term_order("2026春") > term_order("2025秋"));
+        assert!(term_order("25-26学年第2学期") > term_order("25-26学年第1学期"));
+        assert!(term_order("25-26学年第1学期") > term_order("24-25学年第2学期"));
     }
 }
