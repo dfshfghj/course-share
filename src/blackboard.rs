@@ -3,6 +3,7 @@ use crate::media::{self, MediaCandidate};
 use anyhow::{anyhow, Context, Result};
 use regex::Regex;
 use scraper::{ElementRef, Html, Selector};
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use url::Url;
 
@@ -18,7 +19,7 @@ pub struct Course {
     pub url: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Replay {
     pub course_id: String,
     pub course_name: String,

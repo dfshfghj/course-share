@@ -1,5 +1,5 @@
 use crate::app::AppState;
-use crate::ui::{panel, subtitle, title, BORDER, DANGER, MUTED, SUCCESS, WARN};
+use crate::ui::{panel, subtitle, title, DANGER, SUCCESS};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_kit::prelude::*;
 use gpui_kit::{div, px, rgb, Context, IntoElement, Window};
@@ -19,9 +19,6 @@ impl AppState {
                     .flex_col()
                     .gap_4()
                     .child(title("设置"))
-                    .child(subtitle(
-                        "后端地址用于共享广场；下载目录和 ffmpeg 只影响本机。",
-                    ))
                     .child(
                         div()
                             .flex()
@@ -43,7 +40,7 @@ impl AppState {
                             .flex()
                             .flex_col()
                             .gap_2()
-                            .child(subtitle("ffmpeg 路径（HLS 合并需要）"))
+                            .child(subtitle("ffmpeg 路径"))
                             .child(crate::ui::input_field(&self.ffmpeg_input, cx)),
                     )
                     .child(
@@ -94,37 +91,6 @@ impl AppState {
                                 self.shares.len()
                             ))),
                     )
-                    .child(
-                        div()
-                            .p_3()
-                            .rounded_md()
-                            .border_1()
-                            .border_color(rgb(BORDER))
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                                    .child("说明"),
-                            )
-                            .child(subtitle(
-                                "下载只读取教学网数据，不修改课程状态。Cookie 仅保存在本机数据目录。",
-                            ))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(rgb(WARN))
-                                    .child("downloadVideo.action 直链已被标记为失效，统一下载器只使用 resourcese 的 HLS/MP4 直链。"),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(rgb(MUTED))
-                                    .child("好学 App 路线按 TODO 暂缓实现；当前专注教学网 + GUID 共享广场。"),
-                            ),
-                    )
                     .when_some(self.error.clone(), |this, error| {
                         this.child(
                             div()
@@ -142,9 +108,8 @@ impl AppState {
                                 div()
                                     .text_sm()
                                     .text_color(rgb(SUCCESS))
-                                    .child("版本 0.1.0"),
+                                    .child("v 0.1.0"),
                             )
-                            .child(subtitle("Rust + GPUI Kit 0.7.3")),
                     ),
             )
     }

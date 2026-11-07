@@ -8,7 +8,8 @@ use crate::share::{Share, ShareClient};
 use gpui_component::input::InputState;
 use gpui_kit::prelude::*;
 use gpui_kit::{Context, Entity, ScrollHandle, UniformListScrollHandle, Window};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::path::PathBuf;
 use std::sync::mpsc::TryRecvError;
 use std::time::Duration;
@@ -74,6 +75,7 @@ pub struct AppState {
     pub(crate) courses: Vec<Course>,
     pub(crate) selected_course: Option<usize>,
     pub(crate) replays: Vec<Replay>,
+    pub(crate) replays_loading: bool,
     pub(crate) shares: Vec<Share>,
     pub(crate) progress: Option<ProgressState>,
     pub(crate) downloaded: usize,
@@ -149,6 +151,7 @@ impl AppState {
             courses: Vec::new(),
             selected_course: None,
             replays: Vec::new(),
+            replays_loading: false,
             shares: Vec::new(),
             progress: None,
             downloaded: 0,
@@ -468,6 +471,7 @@ impl AppState {
         self.pending_login = None;
         self.captcha_path = None;
         self.progress = None;
+        self.replays_loading = false;
         self.downloading = false;
         self.active_downloads.clear();
         self.status = "已退出登录".to_string();
@@ -521,41 +525,124 @@ impl AppState {
         };
         self.selected_course = Some(index);
         self.favorite_selected = None;
-        self.replays.clear();
         self.replay_scroll = UniformListScrollHandle::new();
         self.load_replays_for(course, window, cx);
         cx.notify();
+    }
+
+    fn replay_cache_path(course: &Course) -> PathBuf {
+        AppConfig::data_dir()
+            .join("replay-cache")
+            .join(format!("{}.json", media::sanitize_filename(&course.id)))
+    }
+
+    fn load_replay_cache(course: &Course) -> Vec<Replay> {
+        let path = Self::replay_cache_path(course);
+        fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| serde_json::from_str::<Vec<Replay>>(&text).ok())
+            .unwrap_or_default()
+    }
+
+    fn save_replay_cache(course: &Course, replays: &[Replay]) {
+        let path = Self::replay_cache_path(course);
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let Ok(data) = serde_json::to_vec_pretty(replays) else {
+            return;
+        };
+        let temporary = path.with_extension("json.tmp");
+        if fs::write(&temporary, data).is_ok() {
+            let _ = fs::rename(&temporary, &path);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+            }
+        }
+    }
+
+    fn merge_replays(cached: Vec<Replay>, fresh: Vec<Replay>) -> Vec<Replay> {
+        let mut by_identity: HashMap<String, Replay> = cached
+            .into_iter()
+            .map(|replay| (replay.identity(), replay))
+            .collect();
+        let mut merged = Vec::with_capacity(fresh.len());
+        for mut replay in fresh {
+            if let Some(old) = by_identity.remove(&replay.identity()) {
+                if replay.media.is_empty() {
+                    replay.media = old.media;
+                }
+                if replay.guid.is_empty() {
+                    replay.guid = old.guid;
+                }
+                if replay.record_time.is_empty() {
+                    replay.record_time = old.record_time;
+                }
+            }
+            merged.push(replay);
+        }
+        merged
     }
 
     fn load_replays_for(&mut self, course: Course, window: &mut Window, cx: &mut Context<Self>) {
         let Some(http) = self.http.clone() else {
             return;
         };
-        let course_name = course.name.clone();
-        self.busy = true;
+        self.replays = Self::load_replay_cache(&course);
+        self.replays_loading = true;
         self.error = None;
-        self.status = format!("加载回放：{course_name}");
+        self.status = format!("加载回放：{}", course.name);
         cx.notify();
+
+        let course_for_load = course.clone();
+        let course_for_apply = course.clone();
         self.run_blocking(
             window,
             cx,
-            move || blackboard::list_replays(&http, &course),
-            |this, result, _window, cx| {
-                this.busy = false;
+            move || blackboard::list_replays(&http, &course_for_load),
+            move |this, result, _window, cx| {
+                let current_id = this
+                    .selected_course
+                    .and_then(|index| this.courses.get(index))
+                    .map(|current| current.id.clone());
+                let is_current = current_id.as_deref() == Some(course_for_apply.id.as_str());
+                if !is_current {
+                    // Cache the result even if the user already switched away.
+                    if let Ok(fresh) = result {
+                        let cached = Self::load_replay_cache(&course_for_apply);
+                        Self::save_replay_cache(
+                            &course_for_apply,
+                            &Self::merge_replays(cached, fresh),
+                        );
+                    }
+                    return;
+                }
+                this.replays_loading = false;
                 match result {
-                    Ok(replays) => {
-                        let with_media = replays.iter().filter(|r| !r.media.is_empty()).count();
+                    Ok(fresh) => {
+                        let cached = this.replays.clone();
+                        this.replays = Self::merge_replays(cached, fresh);
+                        Self::save_replay_cache(&course_for_apply, &this.replays);
+                        let with_media = this
+                            .replays
+                            .iter()
+                            .filter(|replay| !replay.media.is_empty())
+                            .count();
                         this.status = format!(
                             "回放 {} 条，其中 {} 条已解析到媒体地址",
-                            replays.len(),
+                            this.replays.len(),
                             with_media
                         );
-                        this.replays = replays;
-                        this.replay_scroll = UniformListScrollHandle::new();
                     }
                     Err(error) => {
-                        this.error = Some(format!("{error:#}"));
                         this.status = "回放加载失败".to_string();
+                        this.error = Some(if this.replays.is_empty() {
+                            format!("{error:#}")
+                        } else {
+                            format!("刷新失败，显示本地缓存：{error:#}")
+                        });
                     }
                 }
                 cx.notify();

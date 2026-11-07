@@ -1,7 +1,9 @@
 use crate::app::{AppState, SidebarSection, Tab};
 use crate::ui::{subtitle, title, BORDER, DANGER, MUTED, PANEL, PRIMARY, PRIMARY_SOFT};
 use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::spinner::Spinner;
 use gpui_component::Disableable as _;
+use gpui_component::Sizable as _;
 use gpui_kit::prelude::*;
 use gpui_kit::{
     div, px, rgb, uniform_list, AnyElement, Context, ElementId, FontWeight, IntoElement, Window,
@@ -567,7 +569,20 @@ impl AppState {
                         &self.replay_scroll,
                     )),
             )
-            .when(self.replays.is_empty(), |this| {
+            .when(self.replays_loading, |this| {
+                this.child(
+                    div()
+                        .h(px(44.0))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .gap_2()
+                        .child(Spinner::new().small())
+                        .child(subtitle("正在加载回放…")),
+                )
+            })
+            .when(!self.replays_loading && self.replays.is_empty(), |this| {
                 this.child(
                     div()
                         .flex_1()
