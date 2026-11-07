@@ -75,8 +75,28 @@ pub fn guid_from_url(url: &str) -> String {
     static GUID: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
         Regex::new(r"harpocrates/[0-9]+/[0-9]+/[0-9]+/([A-Za-z0-9_-]+)/").unwrap()
     });
-    GUID.captures(url)
+    if let Some(captured) = GUID
+        .captures(url)
         .and_then(|c| c.get(1).map(|m| m.as_str().to_string()))
+    {
+        return captured;
+    }
+    let Ok(parsed) = Url::parse(url) else {
+        return String::new();
+    };
+    let parts: Vec<&str> = parsed.path().split('/').filter(|part| !part.is_empty()).collect();
+    parts
+        .iter()
+        .rev()
+        .skip(1)
+        .find(|part| {
+            (16..=64).contains(&part.len())
+                && part
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+                && !part.chars().all(|ch| ch.is_ascii_digit())
+        })
+        .map(|part| part.to_string())
         .unwrap_or_default()
 }
 
@@ -374,23 +394,29 @@ pub fn format_time(seconds: f64) -> String {
 mod tests {
     use super::*;
 
-    const URL: &str = "https://resourcese.pku.edu.cn/play/0/harpocrates/2026/11/06/37692e24e0b44566990731ac94b414c2/0/playlist.m3u8";
+    const URL: &str = "https://resourcese.pku.edu.cn/play/0/harpocrates/2026/11/06/0123456789abcdef0123456789abcdef/0/playlist.m3u8";
 
     #[test]
     fn extracts_guid_from_harpocrates_path() {
         assert_eq!(
             guid_from_url(URL),
-            "37692e24e0b44566990731ac94b414c2"
+            "0123456789abcdef0123456789abcdef"
         );
+    }
+
+    #[test]
+    fn extracts_guid_from_legacy_mp4_path() {
+        let url = "http://resourcese.pku.edu.cn/play/video/vod/newLowVideo/2024/01/02/FEDCBA9876543210FEDCBA9876543210/h264_500k_mp4_640_360.mp4";
+        assert_eq!(guid_from_url(url), "FEDCBA9876543210FEDCBA9876543210");
     }
 
     #[test]
     fn extracts_hls_and_mp4_but_skips_download_video() {
         let sub_content = r#"{
-            "save_playback": {"is_m3u8": "yes", "contents": "https://resourcese.pku.edu.cn/play/0/harpocrates/2026/11/06/37692e24e0b44566990731ac94b414c2/0/playlist.m3u8"},
+            "save_playback": {"is_m3u8": "yes", "contents": "https://resourcese.pku.edu.cn/play/0/harpocrates/2026/11/06/0123456789abcdef0123456789abcdef/0/playlist.m3u8"},
             "newHighVideo": "https://resourcese.pku.edu.cn/play/video/vod/2026/11/06/newHighVideo.mp4",
             "newLowVideo": "https://resourcese.pku.edu.cn/play/video/vod/2026/11/06/newLowVideo.mp4",
-            "downloadVideo": "https://course.pku.edu.cn/webapps/bb-streammedia-hqy-BBLEARN/downloadVideo.action?resourceId=37692e24e0b44566990731ac94b414c2"
+            "downloadVideo": "https://course.pku.edu.cn/webapps/bb-streammedia-hqy-BBLEARN/downloadVideo.action?resourceId=0123456789abcdef0123456789abcdef"
         }"#;
         let candidates = extract_media_candidates(sub_content);
         assert!(candidates.iter().any(|candidate| candidate.kind == "hls"));
@@ -399,7 +425,7 @@ mod tests {
             .iter()
             .all(|candidate| !candidate.url.contains("downloadVideo")));
         assert_eq!(candidates[0].label, "high");
-        assert_eq!(candidates[0].guid, "37692e24e0b44566990731ac94b414c2");
+        assert_eq!(candidates[0].guid, "0123456789abcdef0123456789abcdef");
     }
 
     #[test]
@@ -423,8 +449,8 @@ mod tests {
 
     #[test]
     fn output_path_skips_empty_course_segment() {
-        let path = output_path(std::path::Path::new("/tmp"), "", "第7-9节", "马老师");
-        assert_eq!(path.file_name().unwrap(), "第7-9节 - 马老师.mp4");
+        let path = output_path(std::path::Path::new("/tmp"), "", "第7-9节", "测试教师");
+        assert_eq!(path.file_name().unwrap(), "第7-9节 - 测试教师.mp4");
     }
 
     #[test]

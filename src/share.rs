@@ -46,8 +46,10 @@ impl Share {
             .find(|candidate| candidate.url.contains("resourcese.pku.edu.cn"))?;
         let guid = if !replay.guid.is_empty() {
             replay.guid.clone()
-        } else {
+        } else if !candidate.guid.is_empty() {
             candidate.guid.clone()
+        } else {
+            crate::media::guid_from_url(&candidate.url)
         };
         if guid.is_empty() {
             return None;
@@ -195,40 +197,72 @@ mod tests {
 
     #[test]
     fn derives_record_date_from_guid_path() {
-        let url = "https://resourcese.pku.edu.cn/play/0/harpocrates/2026/11/06/37692e24e0b44566990731ac94b414c2/0/playlist.m3u8";
+        let url = "https://resourcese.pku.edu.cn/play/0/harpocrates/2026/11/06/0123456789abcdef0123456789abcdef/0/playlist.m3u8";
         assert_eq!(record_date_from_url(url), "2026-11-06");
     }
 
     #[test]
     fn builds_share_from_replay() {
         let course = Course {
-            id: "86268_1".to_string(),
-            name: "算法设计与分析".to_string(),
-            teacher: "张老师".to_string(),
+            id: "10001_1".to_string(),
+            name: "测试课程".to_string(),
+            teacher: "测试教师".to_string(),
             term: "2026春".to_string(),
             url: String::new(),
         };
         let replay = Replay {
             course_id: course.id.clone(),
             course_name: course.name.clone(),
-            replay_id: "4604286".to_string(),
+            replay_id: "900001".to_string(),
             sub_title: "第3-4节".to_string(),
-            lecturer: "张老师".to_string(),
+            lecturer: "测试教师".to_string(),
             record_time: "2026-11-06".to_string(),
             page_url: String::new(),
             media: vec![MediaCandidate {
-                url: "https://resourcese.pku.edu.cn/play/0/harpocrates/2026/11/06/37692e24e0b44566990731ac94b414c2/0/playlist.m3u8".to_string(),
+                url: "https://resourcese.pku.edu.cn/play/0/harpocrates/2026/11/06/0123456789abcdef0123456789abcdef/0/playlist.m3u8".to_string(),
                 kind: "hls".to_string(),
                 label: "saved playback".to_string(),
                 quality: 26,
-                guid: "37692e24e0b44566990731ac94b414c2".to_string(),
+                guid: "0123456789abcdef0123456789abcdef".to_string(),
             }],
-            guid: "37692e24e0b44566990731ac94b414c2".to_string(),
+            guid: "0123456789abcdef0123456789abcdef".to_string(),
         };
         let share = Share::from_replay(&course, &replay, "tester").unwrap();
         assert_eq!(share.guid, replay.guid);
         assert_eq!(share.record_date, "2026-11-06");
         assert_eq!(share.uploader, "tester");
-        assert_eq!(share.course_name, "算法设计与分析");
+        assert_eq!(share.course_name, "测试课程");
+    }
+
+    #[test]
+    fn builds_share_from_legacy_mp4_without_guid() {
+        let course = Course {
+            id: "10002_1".to_string(),
+            name: "测试课程".to_string(),
+            teacher: "测试教师".to_string(),
+            term: "24-25学年第1学期".to_string(),
+            url: String::new(),
+        };
+        let replay = Replay {
+            course_id: course.id.clone(),
+            course_name: course.name.clone(),
+            replay_id: "900002".to_string(),
+            sub_title: "2024-01-02第1-2节".to_string(),
+            lecturer: "测试教师".to_string(),
+            record_time: "2024-12-25 08:00:00".to_string(),
+            page_url: String::new(),
+            media: vec![MediaCandidate {
+                url: "http://resourcese.pku.edu.cn/play/video/vod/newLowVideo/2024/01/02/FEDCBA9876543210FEDCBA9876543210/h264_500k_mp4_640_360.mp4".to_string(),
+                kind: "file".to_string(),
+                label: "saved playback".to_string(),
+                quality: 12,
+                guid: String::new(),
+            }],
+            guid: String::new(),
+        };
+        let share = Share::from_replay(&course, &replay, "tester").unwrap();
+        assert_eq!(share.guid, "FEDCBA9876543210FEDCBA9876543210");
+        assert_eq!(share.m3u8_url, replay.media[0].url);
+        assert_eq!(share.record_time, "2024-12-25 08:00:00");
     }
 }

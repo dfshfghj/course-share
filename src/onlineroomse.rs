@@ -311,11 +311,16 @@ pub fn resolve_via_player(http: &Http, replay: &mut Replay) -> Result<()> {
         ));
     }
     replay.media = candidates;
-    replay.guid = replay
-        .media
-        .first()
-        .map(|candidate| candidate.guid.clone())
-        .unwrap_or_default();
+    let resource_guid = value_string(item, &["resource_guid", "resourceGuid"]);
+    replay.guid = if resource_guid.is_empty() {
+        replay
+            .media
+            .first()
+            .map(|candidate| candidate.guid.clone())
+            .unwrap_or_default()
+    } else {
+        resource_guid
+    };
     if replay.lecturer.is_empty() {
         replay.lecturer = value_string(item, &["teacher_name", "lecturer_name", "lecturer"]);
     }
@@ -383,10 +388,15 @@ pub fn parse_list(value: &Value, course: &Course) -> Vec<Replay> {
             })
             .unwrap_or_default();
         let media = media::extract_media_candidates(&sub_content);
-        let guid = media
-            .first()
-            .map(|candidate| candidate.guid.clone())
-            .unwrap_or_default();
+        let resource_guid = value_string(&item, &["resource_guid", "resourceGuid"]);
+        let guid = if resource_guid.is_empty() {
+            media
+                .first()
+                .map(|candidate| candidate.guid.clone())
+                .unwrap_or_default()
+        } else {
+            resource_guid
+        };
         replays.push(Replay {
             course_id: course.id.clone(),
             course_name: course.name.clone(),
@@ -439,15 +449,15 @@ mod tests {
 
     #[test]
     fn decodes_jwt_payload() {
-        let token = token_with_payload(r#"{"hqyCourseId":"205078","hqySubId":"4604286"}"#);
+        let token = token_with_payload(r#"{"hqyCourseId":"200001","hqySubId":"900001"}"#);
         let payload = decode_jwt(&token).unwrap();
-        assert_eq!(payload["hqyCourseId"], "205078");
-        assert_eq!(payload["hqySubId"], "4604286");
+        assert_eq!(payload["hqyCourseId"], "200001");
+        assert_eq!(payload["hqySubId"], "900001");
     }
 
     #[test]
     fn extracts_signed_casapi_entry() {
-        let html = r#"<iframe src="https://yjapise.pku.edu.cn/casapi/index.php?r=auth/login-with-sign&amp;forward=https%3A%2F%2Fonlineroomse.pku.edu.cn%2Fplayer%3Fcourse_id%3D205078%26sub_id%3D4604286&amp;sign=abc"></iframe>"#;
+        let html = r#"<iframe src="https://yjapise.pku.edu.cn/casapi/index.php?r=auth/login-with-sign&amp;forward=https%3A%2F%2Fonlineroomse.pku.edu.cn%2Fplayer%3Fcourse_id%3D200001%26sub_id%3D900001&amp;sign=abc"></iframe>"#;
         let url = extract_casapi_url(html).unwrap();
         assert!(url.contains("casapi/index.php"));
         assert!(url.contains("sign=abc"));
@@ -463,25 +473,54 @@ mod tests {
     #[test]
     fn parses_onlineroomse_list() {
         let course = Course {
-            id: "86268_1".to_string(),
-            name: "算法设计与分析".to_string(),
-            teacher: "张老师".to_string(),
+            id: "10001_1".to_string(),
+            name: "测试课程".to_string(),
+            teacher: "测试教师".to_string(),
             term: "2026春".to_string(),
             url: String::new(),
         };
         let value = serde_json::json!({
             "list": [{
-                "sub_id": "4604286",
+                "sub_id": "900001",
                 "sub_title": "第3-4节",
-                "lecturer_name": "张老师",
+                "lecturer_name": "测试教师",
                 "recordTime": "2026-11-06",
                 "sub_content": "{\"save_playback\":{\"contents\":\"https://resourcese.pku.edu.cn/play/0/harpocrates/2026/11/06/abc123/0/playlist.m3u8\"}}"
             }]
         });
         let replays = parse_list(&value, &course);
         assert_eq!(replays.len(), 1);
-        assert_eq!(replays[0].replay_id, "4604286");
+        assert_eq!(replays[0].replay_id, "900001");
         assert_eq!(replays[0].guid, "abc123");
         assert_eq!(replays[0].media.len(), 1);
+    }
+
+    #[test]
+    fn parses_legacy_mp4_replay_with_resource_guid() {
+        let course = Course {
+            id: "10002_1".to_string(),
+            name: "测试课程".to_string(),
+            teacher: "测试教师".to_string(),
+            term: "24-25学年第1学期".to_string(),
+            url: String::new(),
+        };
+        let value = serde_json::json!({
+            "list": [{
+                "sub_id": "900002",
+                "sub_title": "2024-01-02第1-2节",
+                "lecturer_name": "测试教师",
+                "resource_guid": "00112233445566778899aabbccddeeff",
+                "sub_content": "{\"save_playback\":{\"contents\":\"http://resourcese.pku.edu.cn/play/video/vod/newLowVideo/2024/01/02/FEDCBA9876543210FEDCBA9876543210/h264_500k_mp4_640_360.mp4\",\"is_m3u8\":\"no\"}}"
+            }]
+        });
+        let replays = parse_list(&value, &course);
+        assert_eq!(replays.len(), 1);
+        assert_eq!(replays[0].guid, "00112233445566778899aabbccddeeff");
+        assert_eq!(replays[0].media.len(), 1);
+        assert_eq!(replays[0].media[0].kind, "file");
+        assert_eq!(
+            replays[0].media[0].guid,
+            "FEDCBA9876543210FEDCBA9876543210"
+        );
     }
 }

@@ -574,35 +574,35 @@ mod tests {
     #[test]
     fn parses_course_links() {
         let html = r#"<ul class="courseListing">
-            <li><a href="/webapps/blackboard/execute/launcher?type=Course&id=PkId{key=86268_1,type=Course}">课程名: 算法设计与分析 (2026春)</a></li>
+            <li><a href="/webapps/blackboard/execute/launcher?type=Course&id=PkId{key=10001_1,type=Course}">课程名: 测试课程 (2026春)</a></li>
         </ul>"#;
         let mut courses = Vec::new();
         let mut seen = HashSet::new();
         parse_courses(html, &base(), &mut courses, &mut seen);
         assert_eq!(courses.len(), 1);
-        assert_eq!(courses[0].id, "86268_1");
-        assert_eq!(courses[0].name, "算法设计与分析");
+        assert_eq!(courses[0].id, "10001_1");
+        assert_eq!(courses[0].name, "测试课程");
         assert_eq!(courses[0].term, "2026春");
 
         let html = r#"<ul class="courseListing">
-            <li><a href="/x?id=PkId{key=_2_1,type=Course}">线性代数(B)习题(24-25学年第1学期本研合上)</a></li>
+            <li><a href="/x?id=PkId{key=_2_1,type=Course}">测试课程(B)习题(24-25学年第1学期本研合上)</a></li>
         </ul>"#;
         let mut courses = Vec::new();
         let mut seen = HashSet::new();
         parse_courses(html, &base(), &mut courses, &mut seen);
-        assert_eq!(courses[0].name, "线性代数(B)习题");
+        assert_eq!(courses[0].name, "测试课程(B)习题");
         assert_eq!(courses[0].term, "24-25学年第1学期");
     }
 
     #[test]
     fn parses_replay_page_with_play_video_and_room_iframe() {
         let token = token_with_payload(
-            r#"{"hqyCourseId":"205078","hqySubId":"4604286","recordTime":"2026-11-06"}"#,
+            r#"{"hqyCourseId":"200001","hqySubId":"900001","recordTime":"2026-11-06"}"#,
         );
         let html = format!(
             r#"<html><body>
-            <a href="/webapps/bb-streammedia-hqy-BBLEARN/playVideo.action?x=1&token={token}">第3次课 时间：2026-11-06 教师：张老师</a>
-            <iframe src="https://yjapise.pku.edu.cn/casapi/index.php?r=auth/login-with-sign&forward=https%3A%2F%2Fonlineroomse.pku.edu.cn%2Fplayer%3Fcourse_id%3D205078%26sub_id%3D4604286"></iframe>
+            <a href="/webapps/bb-streammedia-hqy-BBLEARN/playVideo.action?x=1&token={token}">第3次课 时间：2026-11-06 教师：测试教师</a>
+            <iframe src="https://yjapise.pku.edu.cn/casapi/index.php?r=auth/login-with-sign&forward=https%3A%2F%2Fonlineroomse.pku.edu.cn%2Fplayer%3Fcourse_id%3D200001%26sub_id%3D900001"></iframe>
             </body></html>"#
         );
         let mut plays = Vec::new();
@@ -610,25 +610,25 @@ mod tests {
         let mut queue = Vec::new();
         parse_replay_page(&html, &base(), &mut plays, &mut rooms, &mut queue);
         assert_eq!(plays.len(), 1);
-        assert_eq!(plays[0].replay_id, "4604286");
-        assert!(plays[0].row_text.contains("张老师"));
+        assert_eq!(plays[0].replay_id, "900001");
+        assert!(plays[0].row_text.contains("测试教师"));
         assert_eq!(rooms.len(), 1);
-        assert_eq!(rooms[0].course_id, "205078");
-        assert_eq!(rooms[0].sub_id, "4604286");
+        assert_eq!(rooms[0].course_id, "200001");
+        assert_eq!(rooms[0].sub_id, "900001");
     }
 
     #[test]
     fn extracts_room_ref_from_signed_forward() {
-        let url = "https://yjapise.pku.edu.cn/casapi/index.php?r=auth/login-with-sign&forward=https%3A%2F%2Fonlineroomse.pku.edu.cn%2Fplayer%3Fcourse_id%3D205078%26sub_id%3D4604286";
+        let url = "https://yjapise.pku.edu.cn/casapi/index.php?r=auth/login-with-sign&forward=https%3A%2F%2Fonlineroomse.pku.edu.cn%2Fplayer%3Fcourse_id%3D200001%26sub_id%3D900001";
         let room = extract_room_ref(url).unwrap();
-        assert_eq!(room.course_id, "205078");
-        assert_eq!(room.sub_id, "4604286");
+        assert_eq!(room.course_id, "200001");
+        assert_eq!(room.sub_id, "900001");
     }
 
     #[test]
     fn parses_row_text() {
-        let (sub_title, lecturer) = parse_row_text("第3次课 时间：2026-11-06 教师：张老师", "");
+        let (sub_title, lecturer) = parse_row_text("第3次课 时间：2026-11-06 教师：测试教师", "");
         assert_eq!(sub_title, "第3次课");
-        assert_eq!(lecturer, "张老师");
+        assert_eq!(lecturer, "测试教师");
     }
 }
