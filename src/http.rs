@@ -43,6 +43,10 @@ impl Http {
                 .gzip(true)
                 .brotli(true)
                 .deflate(true)
+                // PKU hosts and the share backend are intranet endpoints; a
+                // desktop proxy (often a localhost Clash/SOCKS listener) can
+                // reset these connections even when it works for the internet.
+                .no_proxy()
         };
         let client = base()
             .redirect(reqwest::redirect::Policy::none())

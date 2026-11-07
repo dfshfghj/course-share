@@ -102,6 +102,7 @@ impl ShareClient {
         let client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(20))
             .connect_timeout(Duration::from_secs(8))
+            .no_proxy()
             .build()
             .context("build share client")?;
         Ok(Self {
