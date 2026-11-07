@@ -1,0 +1,213 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FFMPEG_VERSION: "8.0"
+  FFMPEG_CACHE_VERSION: "1"
+  CARGO_TERM_COLOR: always
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target
+
+jobs:
+  ffmpeg:
+    name: FFmpeg ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            name: linux-x86_64
+            target: x86_64-unknown-linux-gnu
+            static: "1"
+          - os: macos-14
+            name: macos-arm64
+            target: aarch64-apple-darwin
+            static: "0"
+          - os: macos-15-intel
+            name: macos-x86_64
+            target: x86_64-apple-darwin
+            static: "0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore minimal FFmpeg cache
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: vendor/ffmpeg-minimal/${{ matrix.target }}
+          key: ffmpeg-${{ runner.os }}-${{ matrix.target }}-${{ env.FFMPEG_VERSION }}-v${{ env.FFMPEG_CACHE_VERSION }}-${{ hashFiles('scripts/configure-ffmpeg-minimal.sh', 'scripts/build-ffmpeg-minimal.sh') }}
+
+      - name: Install Linux build tools
+        if: runner.os == 'Linux' && steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential curl xz-utils
+
+      - name: Build minimal FFmpeg
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          FFMPEG_TARGET: ${{ matrix.target }}
+          FFMPEG_STATIC: ${{ matrix.static }}
+        run: scripts/build-ffmpeg-minimal.sh --force
+
+      - name: Upload FFmpeg
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-${{ matrix.name }}
+          path: vendor/ffmpeg-minimal/${{ matrix.target }}
+          retention-days: 7
+
+  ffmpeg-windows:
+    name: FFmpeg windows-x86_64
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore minimal FFmpeg cache
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: vendor/ffmpeg-minimal/x86_64-pc-windows-msvc
+          key: ffmpeg-windows-x86_64-${{ env.FFMPEG_VERSION }}-v${{ env.FFMPEG_CACHE_VERSION }}-${{ hashFiles('scripts/configure-ffmpeg-minimal.sh', 'scripts/build-ffmpeg-minimal.sh') }}
+
+      - name: Install MinGW toolchain
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64
+
+      - name: Build minimal FFmpeg
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          FFMPEG_TARGET: x86_64-pc-windows-msvc
+          FFMPEG_STATIC: "1"
+          FFMPEG_CONFIGURE_ARGS: "--enable-cross-compile --target-os=mingw32 --arch=x86_64 --cross-prefix=x86_64-w64-mingw32- --disable-pthreads --enable-w32threads"
+          FFMPEG_EXTRA_LDFLAGS: "-static-libgcc"
+        run: scripts/build-ffmpeg-minimal.sh --force
+
+      - name: Check MinGW runtime dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          x86_64-w64-mingw32-objdump -p \
+            vendor/ffmpeg-minimal/x86_64-pc-windows-msvc/bin/ffmpeg.exe |
+            grep 'DLL Name' | sort -u
+          if x86_64-w64-mingw32-objdump -p \
+            vendor/ffmpeg-minimal/x86_64-pc-windows-msvc/bin/ffmpeg.exe |
+            grep -E 'DLL Name: (libwinpthread|libgcc|libstdc|libssp)'; then
+            echo "ffmpeg.exe depends on the MinGW runtime; adjust linker flags" >&2
+            exit 1
+          fi
+
+      - name: Upload FFmpeg
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-windows-x86_64
+          path: vendor/ffmpeg-minimal/x86_64-pc-windows-msvc
+          retention-days: 7
+
+  app:
+    name: App ${{ matrix.name }}
+    needs: [ffmpeg, ffmpeg-windows]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            name: linux-x86_64
+            target: x86_64-unknown-linux-gnu
+            artifact: ffmpeg-linux-x86_64
+            app_exe: course-share
+            ffmpeg_exe: ffmpeg
+          - os: macos-14
+            name: macos-arm64
+            target: aarch64-apple-darwin
+            artifact: ffmpeg-macos-arm64
+            app_exe: course-share
+            ffmpeg_exe: ffmpeg
+          - os: macos-15-intel
+            name: macos-x86_64
+            target: x86_64-apple-darwin
+            artifact: ffmpeg-macos-x86_64
+            app_exe: course-share
+            ffmpeg_exe: ffmpeg
+          - os: windows-latest
+            name: windows-x86_64
+            target: x86_64-pc-windows-msvc
+            artifact: ffmpeg-windows-x86_64
+            app_exe: course-share.exe
+            ffmpeg_exe: ffmpeg.exe
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download bundled FFmpeg
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: vendor/ffmpeg-minimal/${{ matrix.target }}
+
+      - name: Verify bundled FFmpeg
+        shell: bash
+        run: ls -l "vendor/ffmpeg-minimal/${{ matrix.target }}/bin/${{ matrix.ffmpeg_exe }}"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.name }}
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libssl-dev \
+            libx11-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev \
+            libxcb-xfixes0-dev libxcb-randr0-dev libxcb-xkb-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev \
+            libfontconfig1-dev libfreetype6-dev \
+            libwayland-dev libgl1-mesa-dev libegl1-mesa-dev libvulkan-dev
+
+      - name: Configure Linux build
+        if: runner.os == 'Linux'
+        run: echo "RUST_FONTCONFIG_DLOPEN=1" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: cargo build --locked --release
+
+      - name: Test
+        run: cargo test --locked --release
+
+      - name: Package
+        shell: bash
+        run: |
+          name="course-share-${{ matrix.name }}"
+          mkdir -p "dist/$name/licenses"
+          cp "target/release/${{ matrix.app_exe }}" "dist/$name/"
+          cp "vendor/ffmpeg-minimal/${{ matrix.target }}/bin/${{ matrix.ffmpeg_exe }}" "dist/$name/"
+          cp vendor/ffmpeg-minimal/${{ matrix.target }}/COPYING* "dist/$name/licenses/" 2>/dev/null || true
+          cat > "dist/$name/README.txt" <<'EOF'
+          Course Share
+          ============
+          Keep the bundled ffmpeg executable next to the course-share executable.
+          The bundled FFmpeg is LGPL 2.1+ (GPL/nonfree disabled); see licenses/.
+          EOF
+
+      - name: Upload app
+        uses: actions/upload-artifact@v4
+        with:
+          name: course-share-${{ matrix.name }}
+          path: dist/course-share-${{ matrix.name }}
+          retention-days: 14

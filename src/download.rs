@@ -127,7 +127,7 @@ fn download_file(
             .and_then(|value| value.rsplit('/').next())
             .and_then(|value| value.trim().parse::<u64>().ok());
         if total.map(|total| offset >= total).unwrap_or(false) {
-            fs::rename(&temporary, output)?;
+            media::replace_file(&temporary, output)?;
             return Ok(());
         }
     }
@@ -173,7 +173,7 @@ fn download_file(
             format_bytes(downloaded)
         ));
     }
-    fs::rename(&temporary, output).with_context(|| format!("rename to {}", output.display()))?;
+    media::replace_file(&temporary, output).with_context(|| format!("rename to {}", output.display()))?;
     emit_progress(tx, title, downloaded, total.max(downloaded), started, "完成", true);
     Ok(())
 }
@@ -302,7 +302,7 @@ fn download_hls(
             cache_dir.display()
         ));
     }
-    fs::rename(&temporary, output).with_context(|| format!("rename to {}", output.display()))?;
+    media::replace_file(&temporary, output).with_context(|| format!("rename to {}", output.display()))?;
     let _ = fs::remove_dir_all(&cache_dir);
     Ok(())
 }
@@ -339,7 +339,7 @@ fn emit_progress(
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let temporary = path.with_extension("part");
     fs::write(&temporary, bytes)?;
-    fs::rename(&temporary, path)?;
+    media::replace_file(&temporary, path)?;
     Ok(())
 }
 
@@ -390,7 +390,8 @@ fn run_ffmpeg(
     title: &str,
     tx: &Sender<DownloadEvent>,
 ) -> Result<std::process::ExitStatus> {
-    let mut child = Command::new(ffmpeg)
+    let mut command = Command::new(ffmpeg);
+    command
         .args([
             "-hide_banner",
             "-y",
@@ -404,9 +405,18 @@ fn run_ffmpeg(
         .args(["-c", "copy", "-progress", "pipe:1", "-nostats"])
         .arg(output)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = command
         .spawn()
-        .with_context(|| format!("启动 ffmpeg ({ffmpeg})，请确认已安装并在 PATH 中"))?;
+        .with_context(|| {
+            format!("启动 ffmpeg ({ffmpeg})，请确认内置 ffmpeg 存在或在设置中指定路径")
+        })?;
 
     if let Some(stdout) = child.stdout.take() {
         let reader = BufReader::new(stdout);

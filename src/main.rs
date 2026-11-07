@@ -1,9 +1,12 @@
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod app;
 mod auth;
 mod blackboard;
 mod config;
 mod cookies;
 mod download;
+mod ffmpeg;
 mod http;
 mod media;
 mod onlineroomse;

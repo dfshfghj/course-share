@@ -111,7 +111,7 @@ impl AppState {
         });
         let ffmpeg_input = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("ffmpeg 路径")
+                .placeholder("留空自动（优先使用内置 ffmpeg）")
                 .default_value(config.ffmpeg.clone())
         });
         let verification_input = cx.new(|cx| {
@@ -554,7 +554,7 @@ impl AppState {
         };
         let temporary = path.with_extension("json.tmp");
         if fs::write(&temporary, data).is_ok() {
-            let _ = fs::rename(&temporary, &path);
+            let _ = crate::media::replace_file(&temporary, &path);
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
@@ -746,7 +746,7 @@ impl AppState {
         self.downloading = true;
         self.active_downloads = replays.iter().map(|replay| replay.identity()).collect();
         let output = self.config.download_path();
-        let ffmpeg = self.config.ffmpeg.clone();
+        let ffmpeg = crate::ffmpeg::resolve(&self.config.ffmpeg);
         self.busy = true;
         self.error = None;
         self.progress = None;

@@ -1,11 +1,12 @@
 use crate::app::AppState;
-use crate::ui::{panel, subtitle, title, DANGER, SUCCESS};
+use crate::ui::{panel, subtitle, title, DANGER, MUTED, SUCCESS};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_kit::prelude::*;
 use gpui_kit::{div, px, rgb, Context, IntoElement, Window};
 
 impl AppState {
     pub(crate) fn settings_view(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let ffmpeg = crate::ffmpeg::locate(&self.ffmpeg_input.read(cx).value());
         div()
             .size_full()
             .p_6()
@@ -40,8 +41,22 @@ impl AppState {
                             .flex()
                             .flex_col()
                             .gap_2()
-                            .child(subtitle("ffmpeg 路径"))
-                            .child(crate::ui::input_field(&self.ffmpeg_input, cx)),
+                            .child(subtitle("ffmpeg 路径（留空自动，优先使用内置）"))
+                            .child(crate::ui::input_field(&self.ffmpeg_input, cx))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(rgb(if ffmpeg.source == "未找到" {
+                                        DANGER
+                                    } else {
+                                        MUTED
+                                    }))
+                                    .child(format!(
+                                        "当前使用（{}）：{}",
+                                        ffmpeg.source,
+                                        ffmpeg.path.display()
+                                    )),
+                            ),
                     )
                     .child(
                         div()

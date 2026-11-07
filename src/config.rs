@@ -32,7 +32,7 @@ fn default_download_dir() -> String {
 }
 
 fn default_ffmpeg() -> String {
-    "ffmpeg".to_string()
+    String::new()
 }
 
 impl Default for AppConfig {
@@ -70,10 +70,14 @@ impl AppConfig {
 
     pub fn load() -> Self {
         let path = Self::config_path();
-        fs::read_to_string(&path)
+        let mut config = fs::read_to_string(&path)
             .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_default()
+            .and_then(|text| serde_json::from_str::<Self>(&text).ok())
+            .unwrap_or_default();
+        if config.ffmpeg.trim() == "ffmpeg" || config.ffmpeg.trim() == "auto" {
+            config.ffmpeg.clear();
+        }
+        config
     }
 
     pub fn save(&self) -> Result<()> {
@@ -92,7 +96,10 @@ impl AppConfig {
 }
 
 fn shellexpand_home(value: &str) -> String {
-    if let Some(rest) = value.strip_prefix("~/") {
+    if let Some(rest) = value
+        .strip_prefix("~/")
+        .or_else(|| value.strip_prefix("~\\"))
+    {
         if let Some(home) = dirs::home_dir() {
             return home.join(rest).to_string_lossy().to_string();
         }

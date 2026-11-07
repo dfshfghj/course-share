@@ -232,8 +232,38 @@ pub fn sanitize_filename(value: &str) -> String {
         }
     }
     let clean = clean.trim().trim_matches('.').to_string();
-    let clean = if clean.is_empty() { "replay".to_string() } else { clean };
-    clean.chars().take(180).collect()
+    let clean = clean.chars().take(180).collect::<String>();
+    let clean = clean.trim_end_matches([' ', '.']);
+    let clean = if clean.is_empty() { "replay" } else { clean };
+    if is_reserved_windows_name(clean) {
+        format!("_{clean}")
+    } else {
+        clean.to_string()
+    }
+}
+
+fn is_reserved_windows_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or(name).trim();
+    let stem = stem.to_ascii_uppercase();
+    matches!(
+        stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || (stem.len() == 4
+        && (stem.starts_with("COM") || stem.starts_with("LPT"))
+        && stem.as_bytes()[3].is_ascii_digit()
+        && stem.as_bytes()[3] != b'0')
+}
+
+pub fn replace_file(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        match std::fs::remove_file(to) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    std::fs::rename(from, to)
 }
 
 pub fn output_path(dir: &std::path::Path, course: &str, sub_title: &str, lecturer: &str) -> PathBuf {
@@ -401,5 +431,8 @@ mod tests {
     fn sanitizes_windows_filename() {
         assert_eq!(sanitize_filename("a/b:c*?.mp4"), "a_b_c__.mp4");
         assert_eq!(sanitize_filename("   "), "replay");
+        assert_eq!(sanitize_filename("CON"), "_CON");
+        assert_eq!(sanitize_filename("com1.txt"), "_com1.txt");
+        assert_eq!(sanitize_filename("trailing. "), "trailing");
     }
 }
