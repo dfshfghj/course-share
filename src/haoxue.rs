@@ -212,11 +212,7 @@ fn replays_from_details(course: &Course, details: &HashMap<String, Value>) -> Ve
             replays.push(replay);
         }
     }
-    replays.sort_by(|a, b| {
-        let left = a.replay_id.parse::<i64>().unwrap_or(0);
-        let right = b.replay_id.parse::<i64>().unwrap_or(0);
-        left.cmp(&right)
-    });
+    crate::blackboard::sort_replays(&mut replays);
     replays
 }
 

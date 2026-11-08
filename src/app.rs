@@ -611,6 +611,10 @@ impl AppState {
         fs::read_to_string(&path)
             .ok()
             .and_then(|text| serde_json::from_str::<Vec<Replay>>(&text).ok())
+            .map(|mut replays| {
+                blackboard::sort_replays(&mut replays);
+                replays
+            })
             .unwrap_or_default()
     }
 
@@ -653,6 +657,7 @@ impl AppState {
             }
             merged.push(replay);
         }
+        blackboard::sort_replays(&mut merged);
         merged
     }
 
@@ -1342,7 +1347,8 @@ impl AppState {
     }
 
     pub(crate) fn favorite_replays_for(&self, key: &str) -> Vec<Replay> {
-        self.favorite_shares
+        let mut replays: Vec<Replay> = self
+            .favorite_shares
             .iter()
             .filter(|share| share.course_key() == key)
             .map(|share| {
@@ -1371,7 +1377,9 @@ impl AppState {
                     guid: share.guid.clone(),
                 }
             })
-            .collect()
+            .collect();
+        blackboard::sort_replays(&mut replays);
+        replays
     }
 
     pub(crate) fn download_favorite_all(

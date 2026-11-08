@@ -64,7 +64,99 @@ impl Replay {
         }
         parts.join(" · ")
     }
+}
 
+/// Sort replays by their recorded time (newest first). Titles such as
+/// "第10讲" must not be compared lexicographically, so fall back to the
+/// timestamp embedded in the title or the numeric replay id.
+pub fn sort_replays(replays: &mut [Replay]) {
+    replays.sort_by(|a, b| {
+        let left = sortable_time(&a.record_time).or_else(|| sortable_time(&a.sub_title));
+        let right = sortable_time(&b.record_time).or_else(|| sortable_time(&b.sub_title));
+        right
+            .cmp(&left)
+            .then_with(|| numeric_id(&b.replay_id).cmp(&numeric_id(&a.replay_id)))
+            .then_with(|| b.sub_title.cmp(&a.sub_title))
+    });
+}
+
+fn numeric_id(value: &str) -> i64 {
+    value.parse::<i64>().unwrap_or(0)
+}
+
+/// Parse common Blackboard/Haoxue time strings into epoch seconds.
+/// Supports "2026-09-07", "2024-12-25 08:00:00", "2026年9月7日",
+/// unix seconds (10 digits) and unix milliseconds (13 digits).
+pub fn sortable_time(value: &str) -> Option<i64> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if value.chars().all(|c| c.is_ascii_digit()) {
+        match value.len() {
+            10 => {
+                let seconds: i64 = value.parse().ok()?;
+                return (seconds > 1_000_000_000).then_some(seconds);
+            }
+            13 => {
+                let millis: i64 = value.parse().ok()?;
+                return Some(millis / 1000);
+            }
+            _ => {}
+        }
+    }
+
+    let fields: Vec<&str> = value
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|part| !part.is_empty())
+        .collect();
+    let year: i64 = fields.first()?.parse().ok()?;
+    if !(1900..=2999).contains(&year) {
+        return None;
+    }
+    let month: i64 = fields.get(1).and_then(|part| part.parse().ok()).unwrap_or(1);
+    let day: i64 = fields.get(2).and_then(|part| part.parse().ok()).unwrap_or(1);
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+
+    let mut seconds = days_from_civil(year, month, day) * 86_400;
+    if let Some((hour, minute, second)) = clock_fields(value) {
+        seconds += hour * 3600 + minute * 60 + second;
+    }
+    Some(seconds)
+}
+
+fn clock_fields(value: &str) -> Option<(i64, i64, i64)> {
+    let mut parts = value.split(':');
+    let head = parts.next()?;
+    let minutes = parts.next()?;
+    let seconds = parts.next().unwrap_or("0");
+    let hour: i64 = head
+        .rsplit(|c: char| !c.is_ascii_digit())
+        .next()
+        .and_then(|part| part.parse().ok())?;
+    let minute: i64 = minutes.chars().take(2).collect::<String>().parse().ok()?;
+    let second: i64 = seconds
+        .chars()
+        .take(2)
+        .collect::<String>()
+        .parse()
+        .unwrap_or(0);
+    if hour > 23 || minute > 59 || second > 59 {
+        return None;
+    }
+    Some((hour, minute, second))
+}
+
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let shifted_month = (month + 9) % 12;
+    let day_of_year = (153 * shifted_month + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
 }
 
 #[derive(Clone, Debug, Default)]
@@ -281,8 +373,9 @@ pub fn list_replays(http: &Http, course: &Course) -> Result<Vec<Replay>> {
             });
         }
     }
-    replays.sort_by(|a, b| a.sub_title.cmp(&b.sub_title));
-    replays.dedup_by(|a, b| a.identity() == b.identity());
+    let mut seen = HashSet::new();
+    replays.retain(|replay| seen.insert(replay.identity()));
+    sort_replays(&mut replays);
 
     // Resolve media through the real player flow (playVideo -> casapi -> player
     // auth_data -> courseapi schedule detail). Cap the eager pass to keep huge
@@ -641,5 +734,56 @@ mod tests {
         let (sub_title, lecturer) = parse_row_text("第3次课 时间：2026-11-06 教师：测试教师", "");
         assert_eq!(sub_title, "第3次课");
         assert_eq!(lecturer, "测试教师");
+    }
+
+    fn replay(id: &str, title: &str, time: &str) -> Replay {
+        Replay {
+            course_id: "10001_1".to_string(),
+            course_name: "测试课程".to_string(),
+            replay_id: id.to_string(),
+            sub_title: title.to_string(),
+            lecturer: String::new(),
+            record_time: time.to_string(),
+            page_url: String::new(),
+            media: Vec::new(),
+            guid: String::new(),
+        }
+    }
+
+    #[test]
+    fn parses_time_variants() {
+        assert_eq!(sortable_time("2026-09-07"), Some(1_788_739_200));
+        assert_eq!(
+            sortable_time("2026年9月7日 08:30"),
+            sortable_time("2026-09-07 08:30:00")
+        );
+        assert!(sortable_time("2026-09-07 08:00:00") > sortable_time("2026-09-07"));
+        assert!(sortable_time("1788739200").is_some());
+        assert!(sortable_time("1788739200000").is_some());
+        assert_eq!(sortable_time("第10讲"), None);
+    }
+
+    #[test]
+    fn sorts_replays_by_record_time_newest_first() {
+        let mut replays = vec![
+            replay("1", "第2讲", "2026-09-06"),
+            replay("3", "第10讲", "2026-09-20"),
+            replay("2", "第1讲", "2026-09-13 08:00:00"),
+        ];
+        sort_replays(&mut replays);
+        let titles: Vec<&str> = replays.iter().map(|r| r.sub_title.as_str()).collect();
+        assert_eq!(titles, vec!["第10讲", "第1讲", "第2讲"]);
+    }
+
+    #[test]
+    fn sorts_undated_replays_by_numeric_id() {
+        let mut replays = vec![
+            replay("10", "回放 10", ""),
+            replay("2", "回放 2", ""),
+            replay("1", "回放 1", ""),
+        ];
+        sort_replays(&mut replays);
+        let ids: Vec<&str> = replays.iter().map(|r| r.replay_id.as_str()).collect();
+        assert_eq!(ids, vec!["10", "2", "1"]);
     }
 }

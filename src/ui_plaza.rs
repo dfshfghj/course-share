@@ -36,7 +36,20 @@ impl AppState {
     fn plaza_course_groups(&self) -> Vec<PlazaCourse> {
         self.share_groups()
             .into_iter()
-            .map(|(key, shares)| {
+            .map(|(key, mut shares)| {
+                shares.sort_by(|a, b| {
+                    let time = |share: &Share| {
+                        let raw = if share.record_time.is_empty() {
+                            share.record_date.as_str()
+                        } else {
+                            share.record_time.as_str()
+                        };
+                        crate::blackboard::sortable_time(raw)
+                    };
+                    time(b)
+                        .cmp(&time(a))
+                        .then_with(|| b.replay_title.cmp(&a.replay_title))
+                });
                 let name = shares
                     .first()
                     .map(|share| share.course_name.clone())
