@@ -1,9 +1,11 @@
+#[cfg(target_os = "linux")]
 use crate::config::AppConfig;
 use crate::http::Http;
 use anyhow::{anyhow, Context, Result};
 use base64::Engine as _;
 use std::collections::HashMap;
 use std::env;
+#[cfg(target_os = "linux")]
 use std::fs;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -380,12 +382,20 @@ fn open_browser(url: &str) -> Result<()> {
 
     #[cfg(windows)]
     {
-        let mut command = Command::new("cmd");
-        command.args(["/C", "start", "", url]);
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+        // cmd.exe/`start` and other console hosts flash a terminal window.
+        // rundll32 is a GUI process and hands the URL to the default browser
+        // through the shell URL handler without creating a console.
+        let mut command = Command::new("rundll32.exe");
+        command
+            .args(["url.dll,FileProtocolHandler", url])
+            .creation_flags(CREATE_NO_WINDOW);
         return spawn_browser(command);
     }
 
-    #[allow(unreachable_code)]
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
         let mut command = Command::new("xdg-open");
         command.arg(url);
@@ -403,6 +413,7 @@ fn spawn_browser(mut command: Command) -> Result<()> {
     Ok(())
 }
 
+#[cfg(not(windows))]
 fn command_exists(name: &str) -> bool {
     env::var_os("PATH")
         .map(|paths| {
