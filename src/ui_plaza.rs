@@ -2,10 +2,13 @@ use crate::app::AppState;
 use crate::share::Share;
 use crate::ui::{subtitle, title, BORDER, MUTED, PANEL};
 use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::spinner::Spinner;
 use gpui_component::Disableable as _;
+use gpui_component::Sizable as _;
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    div, px, rgb, uniform_list, AnyElement, Context, ElementId, FontWeight, IntoElement, Window,
+    div, px, rgb, uniform_list, AnyElement, Context, ElementId, FontWeight, IntoElement,
+    ScrollWheelEvent, Window,
 };
 
 struct PlazaCourse {
@@ -194,14 +197,75 @@ impl AppState {
                             .min_h_0()
                             .overflow_y_scroll()
                             .track_scroll(&self.plaza_grid_scroll)
+                            .on_scroll_wheel(cx.listener(
+                                |this, _event: &ScrollWheelEvent, window, cx| {
+                                    if !this.plaza_has_more {
+                                        return;
+                                    }
+                                    let offset = this.plaza_grid_scroll.offset().y;
+                                    let max = this.plaza_grid_scroll.max_offset().y;
+                                    // offset is negative while scrolling down;
+                                    // the remaining distance is max + offset.
+                                    if f32::from(max + offset) < 240.0 {
+                                        this.load_more_plaza(window, cx);
+                                    }
+                                },
+                            ))
                             .child(
                                 div()
                                     .p_6()
                                     .flex()
-                                    .flex_wrap()
-                                    .justify_center()
+                                    .flex_col()
                                     .gap_4()
-                                    .children(cards),
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_wrap()
+                                            .justify_center()
+                                            .gap_4()
+                                            .children(cards),
+                                    )
+                                    .when(self.plaza_loading_more, |this| {
+                                        this.child(
+                                            div()
+                                                .h(px(44.0))
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .gap_2()
+                                                .child(Spinner::new().small())
+                                                .child(subtitle("加载更多…")),
+                                        )
+                                    })
+                                    .when(
+                                        !self.plaza_loading_more && self.plaza_has_more,
+                                        |this| {
+                                            this.child(
+                                                div().flex().justify_center().child(
+                                                    Button::new("plaza-load-more")
+                                                        .label("加载更多")
+                                                        .on_click(cx.listener(
+                                                            |this, _, window, cx| {
+                                                                this.load_more_plaza(window, cx);
+                                                            },
+                                                        )),
+                                                ),
+                                            )
+                                        },
+                                    )
+                                    .when(
+                                        !self.plaza_has_more && !courses.is_empty(),
+                                        |this| {
+                                            this.child(
+                                                div().flex().justify_center().child(subtitle(
+                                                    format!(
+                                                        "已加载全部 {} 条",
+                                                        self.plaza_total
+                                                    ),
+                                                )),
+                                            )
+                                        },
+                                    ),
                             ),
                     )
                     .child(crate::ui_scroll::vertical_rail(

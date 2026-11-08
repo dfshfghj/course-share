@@ -5,7 +5,7 @@ use crate::download::{self, DownloadEvent};
 use crate::http::Http;
 use crate::media::{self, MediaCandidate};
 use crate::share::{Share, ShareClient};
-use gpui_component::input::InputState;
+use gpui_component::input::{InputEvent, InputState};
 use gpui_kit::prelude::*;
 use gpui_kit::{Context, Entity, ScrollHandle, UniformListScrollHandle, Window};
 use std::collections::{HashMap, HashSet};
@@ -14,6 +14,8 @@ use std::path::PathBuf;
 use std::sync::mpsc::TryRecvError;
 use std::time::Duration;
 use url::Url;
+
+const PLAZA_PAGE_SIZE: usize = 200;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
@@ -84,6 +86,10 @@ pub struct AppState {
     pub(crate) replays_loading_label: String,
     pub(crate) pending_haoxue_course: Option<Course>,
     pub(crate) shares: Vec<Share>,
+    pub(crate) favorite_shares: Vec<Share>,
+    pub(crate) plaza_loading_more: bool,
+    pub(crate) plaza_has_more: bool,
+    pub(crate) plaza_total: usize,
     pub(crate) progress: Option<ProgressState>,
     pub(crate) downloaded: usize,
     pub(crate) skipped: usize,
@@ -168,11 +174,25 @@ impl AppState {
             replays_loading_label: "正在加载回放…".to_string(),
             pending_haoxue_course: None,
             shares: Vec::new(),
+            favorite_shares: Vec::new(),
+            plaza_loading_more: false,
+            plaza_has_more: false,
+            plaza_total: 0,
             progress: None,
             downloaded: 0,
             skipped: 0,
             failed: 0,
         };
+        cx.subscribe_in(
+            &app.plaza_search,
+            window,
+            |this, _input, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::PressEnter { .. }) {
+                    this.refresh_plaza(window, cx);
+                }
+            },
+        )
+        .detach();
         app
     }
 
@@ -507,6 +527,10 @@ impl AppState {
         self.courses.clear();
         self.replays.clear();
         self.shares.clear();
+        self.favorite_shares.clear();
+        self.plaza_loading_more = false;
+        self.plaza_has_more = false;
+        self.plaza_total = 0;
         self.selected_course = None;
         self.plaza_selected_course = None;
         self.favorite_selected = None;
@@ -1104,6 +1128,7 @@ impl AppState {
         self.plaza_selected_course = None;
         self.plaza_grid_scroll = ScrollHandle::new();
         self.plaza_detail_scroll = UniformListScrollHandle::new();
+        self.plaza_loading_more = false;
         let query = self.plaza_search.read(cx).value().trim().to_string();
         let backend = self.config.backend_url.clone();
         self.busy = true;
@@ -1113,16 +1138,65 @@ impl AppState {
         self.run_blocking(
             window,
             cx,
-            move || ShareClient::new(&backend)?.list(&query),
+            move || ShareClient::new(&backend)?.list_page(&query, PLAZA_PAGE_SIZE, 0),
             |this, result, _window, cx| {
                 this.busy = false;
                 match result {
-                    Ok(shares) => {
+                    Ok((shares, total)) => {
                         this.shares = shares;
+                        this.plaza_total = total;
+                        this.plaza_has_more = this.shares.len() < total;
+                        this.status = format!("广场 {} 条", total);
                     }
                     Err(error) => {
+                        this.shares.clear();
+                        this.plaza_has_more = false;
                         this.error = Some(format!("{error:#}"));
                         this.status = "广场加载失败".to_string();
+                    }
+                }
+                cx.notify();
+            },
+        );
+    }
+
+    pub(crate) fn load_more_plaza(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.plaza_loading_more || !self.plaza_has_more || self.busy {
+            return;
+        }
+        let query = self.plaza_search.read(cx).value().trim().to_string();
+        let backend = self.config.backend_url.clone();
+        let offset = self.shares.len();
+        let query_for_work = query.clone();
+        self.plaza_loading_more = true;
+        cx.notify();
+        self.run_blocking(
+            window,
+            cx,
+            move || ShareClient::new(&backend)?.list_page(&query_for_work, PLAZA_PAGE_SIZE, offset),
+            move |this, result, _window, cx| {
+                this.plaza_loading_more = false;
+                let current_query = this.plaza_search.read(cx).value().trim().to_string();
+                if current_query != query {
+                    cx.notify();
+                    return;
+                }
+                match result {
+                    Ok((page, total)) => {
+                        let before = this.shares.len();
+                        for share in page {
+                            if !this.shares.iter().any(|existing| existing.id == share.id) {
+                                this.shares.push(share);
+                            }
+                        }
+                        this.plaza_total = total;
+                        this.plaza_has_more =
+                            this.shares.len() < total && this.shares.len() > before;
+                        this.status = format!("广场 {} 条", total);
+                    }
+                    Err(error) => {
+                        this.plaza_has_more = false;
+                        this.error = Some(format!("加载更多失败：{error:#}"));
                     }
                 }
                 cx.notify();
@@ -1139,7 +1213,7 @@ impl AppState {
         self.sidebar_section = section;
         // Switching sections only changes the sidebar list. The right panel
         // keeps the current course/favorite until the user clicks an item.
-        if section == SidebarSection::Favorites && self.shares.is_empty() && !self.busy {
+        if section == SidebarSection::Favorites && self.favorite_shares.is_empty() && !self.busy {
             self.refresh_shares(window, cx);
         }
         self.course_scroll = UniformListScrollHandle::new();
@@ -1179,7 +1253,7 @@ impl AppState {
     ) {
         self.tab = Tab::Courses;
         let needs_shares = !self
-            .shares
+            .favorite_shares
             .iter()
             .any(|share| share.course_key() == key);
         self.favorite_selected = Some(key);
@@ -1207,7 +1281,7 @@ impl AppState {
                 this.busy = false;
                 match result {
                     Ok(shares) => {
-                        this.shares = shares;
+                        this.favorite_shares = shares;
                         this.error = None;
                     }
                     Err(error) => {
@@ -1221,7 +1295,7 @@ impl AppState {
     }
 
     pub(crate) fn favorite_replays_for(&self, key: &str) -> Vec<Replay> {
-        self.shares
+        self.favorite_shares
             .iter()
             .filter(|share| share.course_key() == key)
             .map(|share| {

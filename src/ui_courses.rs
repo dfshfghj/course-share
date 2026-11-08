@@ -44,7 +44,7 @@ impl AppState {
 
     fn favorite_courses(&self) -> Vec<(String, String, String)> {
         let mut out: Vec<(String, String, String)> = Vec::new();
-        for share in &self.shares {
+        for share in &self.favorite_shares {
             let key = share.course_key();
             if self.is_course_starred(&key, &share.course_name)
                 && !out.iter().any(|(existing, _, _)| *existing == key)
@@ -360,7 +360,7 @@ impl AppState {
             .filter(|replay| !self.replay_downloaded(replay))
             .count();
         let name = self
-            .shares
+            .favorite_shares
             .iter()
             .find(|share| share.course_key() == key)
             .map(|share| share.course_name.clone())
@@ -370,13 +370,13 @@ impl AppState {
                     .to_string()
             });
         let term = self
-            .shares
+            .favorite_shares
             .iter()
             .find(|share| share.course_key() == key && !share.term.is_empty())
             .map(|share| share.term.clone())
             .unwrap_or_default();
         let teacher = self
-            .shares
+            .favorite_shares
             .iter()
             .find(|share| share.course_key() == key && !share.teacher.is_empty())
             .map(|share| share.teacher.clone())
