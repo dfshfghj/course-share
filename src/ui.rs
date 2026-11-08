@@ -1,4 +1,4 @@
-use crate::app::{AppState, DownloadTask, DownloadTaskState, LoginMode, Tab};
+use crate::app::{AppState, DownloadTask, DownloadTaskState, LoginMode};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputState};
 use gpui_component::Disableable as _;
@@ -67,75 +67,6 @@ pub(crate) fn title(text: impl Into<String>) -> gpui_kit::Div {
 
 
 impl AppState {
-    fn tab_button(
-        &self,
-        id: &'static str,
-        label: &'static str,
-        tab: Tab,
-        cx: &mut Context<Self>,
-    ) -> Button {
-        let selected = self.tab == tab;
-        let button = Button::new(id).label(label);
-        let button = if selected { button.primary() } else { button.ghost() };
-        button.on_click(cx.listener(move |this, _, window, cx| {
-            this.tab = tab;
-            if tab == Tab::Plaza {
-                this.refresh_plaza(window, cx);
-            }
-            cx.notify();
-        }))
-    }
-
-    fn header(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .h(px(62.0))
-            .px_5()
-            .flex()
-            .items_center()
-            .justify_between()
-            .bg(rgb(PANEL))
-            .border_1()
-            .border_color(rgb(BORDER))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .child(
-                        div()
-                            .text_xl()
-                            .font_weight(FontWeight::BOLD)
-                            .child("Course Share"),
-                    )
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(self.tab_button("tab-courses", "课程", Tab::Courses, cx))
-                    .child(self.tab_button("tab-plaza", "广场", Tab::Plaza, cx))
-                    .child(self.tab_button("tab-settings", "设置", Tab::Settings, cx))
-                    .flex_shrink_0(),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .child(subtitle(if self.http.is_some() { "已登录" } else { "未登录" }))
-                    .flex_shrink_0()
-                    .when(self.http.is_some(), |this| {
-                        this.child(
-                            Button::new("logout")
-                                .label("退出")
-                                .ghost()
-                                .on_click(cx.listener(|this, _, _, cx| this.logout(cx))),
-                        )
-                    }),
-            )
-    }
-
     fn login_view(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let pending = self.pending_login.clone();
         let password_mode = self.login_mode == LoginMode::Password;
@@ -358,7 +289,7 @@ impl AppState {
                             .child(
                                 self.error
                                     .clone()
-                                    .unwrap_or_else(|| self.status.clone())
+                                    .unwrap_or_else(|| "下载进度".to_string())
                                     .chars()
                                     .take(300)
                                     .collect::<String>(),
@@ -525,11 +456,7 @@ impl AppState {
 impl Render for AppState {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let logged_in = self.http.is_some();
-        let content = if self.tab == Tab::Plaza {
-            self.plaza_view(window, cx).into_any_element()
-        } else if self.tab == Tab::Settings {
-            self.settings_view(window, cx).into_any_element()
-        } else if logged_in {
+        let content = if logged_in {
             self.body(window, cx).into_any_element()
         } else {
             self.login_view(cx).into_any_element()
@@ -540,11 +467,32 @@ impl Render for AppState {
             .flex_col()
             .bg(rgb(BG))
             .text_color(rgb(TEXT))
-            .child(self.header(cx))
-            .child(div().flex_1().min_h(px(0.0)).child(content))
-            .when(self.download_footer_visible(), |this| {
-                this.child(self.footer(cx))
-            })
+            .child(
+                gpui_component::TitleBar::new().child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child("Course Share"),
+                ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_h_0()
+                    .child(self.course_sidebar(window, cx))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w_0()
+                            .child(div().flex_1().min_h_0().child(content))
+                            .when(self.download_footer_visible(), |this| {
+                                this.child(self.footer(cx))
+                            }),
+                    ),
+            )
             .when(logged_in && self.pending_login.is_some(), |this| {
                 this.child(
                     div()

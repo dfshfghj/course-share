@@ -1,9 +1,9 @@
 use crate::app::{AppState, SidebarSection, Tab};
-use crate::ui::{subtitle, title, BORDER, DANGER, MUTED, PANEL, PRIMARY, PRIMARY_SOFT};
+use crate::ui::{subtitle, title, BORDER, DANGER, MUTED, PANEL, PRIMARY, PRIMARY_SOFT, SUCCESS};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::spinner::Spinner;
 use gpui_component::Disableable as _;
-use gpui_component::Sizable as _;
+use gpui_component::{IconName, Sizable as _};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     div, px, rgb, uniform_list, AnyElement, Context, ElementId, FontWeight, IntoElement, Window,
@@ -11,6 +11,11 @@ use gpui_kit::{
 
 #[derive(Clone)]
 enum SidebarRow {
+    Section {
+        section: SidebarSection,
+        count: usize,
+        collapsed: bool,
+    },
     Group {
         term: String,
         count: usize,
@@ -35,11 +40,7 @@ impl AppState {
         } else {
             self.replay_list(window, cx).into_any_element()
         };
-        div()
-            .size_full()
-            .flex()
-            .child(self.course_sidebar(window, cx))
-            .child(right)
+        div().size_full().flex().child(right)
     }
 
     fn favorite_courses(&self) -> Vec<(String, String, String)> {
@@ -74,92 +75,81 @@ impl AppState {
     }
 
     fn sidebar_rows(&self) -> Vec<SidebarRow> {
-        let mut groups: Vec<(String, Vec<SidebarRow>)> = Vec::new();
-        match self.sidebar_section {
-            SidebarSection::Courses => {
-                for (index, course) in self.courses.iter().enumerate() {
-                    let term = if course.term.trim().is_empty() {
-                        "未知学期".to_string()
-                    } else {
-                        course.term.clone()
-                    };
-                    if let Some((_, rows)) = groups.iter_mut().find(|(name, _)| *name == term) {
-                        rows.push(SidebarRow::Enrolled(index));
-                    } else {
-                        groups.push((term, vec![SidebarRow::Enrolled(index)]));
-                    }
+        let mut rows = Vec::new();
+
+        let courses_collapsed = self.collapsed_sections.contains("courses");
+        rows.push(SidebarRow::Section {
+            section: SidebarSection::Courses,
+            count: self.courses.len(),
+            collapsed: courses_collapsed,
+        });
+        if !courses_collapsed {
+            let mut groups: Vec<(String, Vec<SidebarRow>)> = Vec::new();
+            for (index, course) in self.courses.iter().enumerate() {
+                let term = if course.term.trim().is_empty() {
+                    "未知学期".to_string()
+                } else {
+                    course.term.clone()
+                };
+                if let Some((_, rows)) = groups.iter_mut().find(|(name, _)| *name == term) {
+                    rows.push(SidebarRow::Enrolled(index));
+                } else {
+                    groups.push((term, vec![SidebarRow::Enrolled(index)]));
                 }
             }
-            SidebarSection::Favorites => {
-                for (key, name, term) in self.favorite_courses() {
-                    let term = if term.trim().is_empty() {
-                        "未知学期".to_string()
-                    } else {
-                        term
-                    };
-                    let row = SidebarRow::Favorite { key, name };
-                    if let Some((_, rows)) = groups.iter_mut().find(|(t, _)| *t == term) {
-                        rows.push(row);
-                    } else {
-                        groups.push((term, vec![row]));
-                    }
+            groups.sort_by(|(a, _), (b, _)| term_order(b).cmp(&term_order(a)));
+            for (term, courses) in groups {
+                let collapsed = self.collapsed_terms.contains(&term);
+                rows.push(SidebarRow::Group {
+                    term: term.clone(),
+                    count: courses.len(),
+                    collapsed,
+                });
+                if !collapsed {
+                    rows.extend(courses);
                 }
             }
         }
 
-        let mut rows = Vec::new();
-        groups.sort_by(|(a, _), (b, _)| term_order(b).cmp(&term_order(a)));
-        for (term, courses) in groups {
-            let collapsed = self.collapsed_terms.contains(&term);
-            rows.push(SidebarRow::Group {
-                term: term.clone(),
-                count: courses.len(),
-                collapsed,
-            });
-            if !collapsed {
-                rows.extend(courses);
+        let favorites = self.favorite_courses();
+        let favorites_collapsed = self.collapsed_sections.contains("favorites");
+        rows.push(SidebarRow::Section {
+            section: SidebarSection::Favorites,
+            count: favorites.len(),
+            collapsed: favorites_collapsed,
+        });
+        if !favorites_collapsed {
+            let mut groups: Vec<(String, Vec<SidebarRow>)> = Vec::new();
+            for (key, name, term) in favorites {
+                let term = if term.trim().is_empty() {
+                    "未知学期".to_string()
+                } else {
+                    term
+                };
+                let row = SidebarRow::Favorite { key, name };
+                if let Some((_, rows)) = groups.iter_mut().find(|(t, _)| *t == term) {
+                    rows.push(row);
+                } else {
+                    groups.push((term, vec![row]));
+                }
+            }
+            groups.sort_by(|(a, _), (b, _)| term_order(b).cmp(&term_order(a)));
+            for (term, courses) in groups {
+                let collapsed = self.collapsed_terms.contains(&term);
+                rows.push(SidebarRow::Group {
+                    term: term.clone(),
+                    count: courses.len(),
+                    collapsed,
+                });
+                if !collapsed {
+                    rows.extend(courses);
+                }
             }
         }
         rows
     }
 
-    fn section_tab(
-        &self,
-        id: &'static str,
-        label: &'static str,
-        section: SidebarSection,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let selected = self.sidebar_section == section;
-        div()
-            .id(id)
-            .h(px(36.0))
-            .px_1()
-            .flex()
-            .items_center()
-            .cursor_pointer()
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.set_sidebar_section(section, window, cx);
-            }))
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(if selected {
-                        FontWeight::SEMIBOLD
-                    } else {
-                        FontWeight::NORMAL
-                    })
-                    .text_color(if selected {
-                        rgb(PRIMARY)
-                    } else {
-                        rgb(MUTED)
-                    })
-                    .child(label),
-            )
-            .into_any_element()
-    }
-
-    fn course_sidebar(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn course_sidebar(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let rows = self.sidebar_rows();
         let row_count = rows.len();
         let rows_for_list = rows.clone();
@@ -178,44 +168,16 @@ impl AppState {
         .min_h_0()
         .track_scroll(&self.course_scroll);
 
-        let count = match self.sidebar_section {
-            SidebarSection::Courses => self.courses.len(),
-            SidebarSection::Favorites => self.favorite_courses().len(),
-        };
-        let empty_text = match self.sidebar_section {
-            SidebarSection::Courses => "登录后会自动加载课程。",
-            SidebarSection::Favorites => "在共享广场给课程点 ☆ 后，会出现在这里。",
-        };
-
         div()
             .w(px(300.0))
             .h_full()
             .flex()
             .flex_col()
+            .flex_none()
             .bg(rgb(PANEL))
-            .child(
-                div()
-                    .h(px(52.0))
-                    .px_4()
-                    .flex_none()
-                    .flex()
-                    .items_end()
-                    .gap_4()
-                    .child(self.section_tab(
-                        "section-courses",
-                        "课程",
-                        SidebarSection::Courses,
-                        cx,
-                    ))
-                    .child(self.section_tab(
-                        "section-favorites",
-                        "收藏",
-                        SidebarSection::Favorites,
-                        cx,
-                    ))
-                    .child(div().flex_1())
-                    .child(div().pb_2().child(subtitle(format!("{count}")))),
-            )
+            .border_r_1()
+            .border_color(rgb(BORDER))
+            .child(self.plaza_entry(cx))
             .child(
                 div()
                     .flex()
@@ -228,20 +190,138 @@ impl AppState {
                         &self.course_scroll,
                     )),
             )
-            .when(row_count == 0, |this| {
-                this.child(
-                    div().px_4().py_3().child(
+            .child(self.sidebar_footer(cx))
+    }
+
+    fn plaza_entry(&self, cx: &mut Context<Self>) -> AnyElement {
+        let selected = self.tab == Tab::Plaza;
+        div()
+            .id("sidebar-plaza")
+            .h(px(40.0))
+            .w_full()
+            .flex_none()
+            .px_4()
+            .flex()
+            .items_center()
+            .gap_2()
+            .cursor_pointer()
+            .border_b_1()
+            .border_color(rgb(BORDER))
+            .when(selected, |this| this.bg(rgb(PRIMARY_SOFT)))
+            .when(!selected, |this| this.hover(|style| style.bg(rgb(0xf1f5f9))))
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.open_plaza(window, cx);
+            }))
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(if selected {
+                        FontWeight::SEMIBOLD
+                    } else {
+                        FontWeight::NORMAL
+                    })
+                    .text_color(if selected { rgb(PRIMARY) } else { rgb(MUTED) })
+                    .child("广场"),
+            )
+            .into_any_element()
+    }
+
+    fn sidebar_footer(&self, cx: &mut Context<Self>) -> AnyElement {
+        let logged_in = self.http.is_some();
+        let settings_selected = self.tab == Tab::Settings;
+        div()
+            .flex_none()
+            .px_4()
+            .py_3()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_2()
+            .border_t_1()
+            .border_color(rgb(BORDER))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
                         div()
-                            .text_sm()
-                            .text_color(rgb(MUTED))
-                            .child(empty_text),
-                    ),
-                )
-            })
+                            .w(px(8.0))
+                            .h(px(8.0))
+                            .rounded_full()
+                            .bg(rgb(if logged_in { SUCCESS } else { MUTED })),
+                    )
+                    .child(subtitle(if logged_in { "已登录" } else { "未登录" })),
+            )
+            .child(
+                {
+                    let button = Button::new("sidebar-settings")
+                        .icon(IconName::Settings)
+                        .accessibility_label("设置");
+                    let button = if settings_selected {
+                        button.primary()
+                    } else {
+                        button.ghost()
+                    };
+                    button.on_click(cx.listener(|this, _, _, cx| {
+                        this.open_settings(cx);
+                    }))
+                },
+            )
+            .into_any_element()
     }
 
     fn sidebar_row(&self, row: &SidebarRow, cx: &mut Context<Self>) -> AnyElement {
         match row {
+            SidebarRow::Section {
+                section,
+                count,
+                collapsed,
+            } => {
+                let section = *section;
+                let label = match section {
+                    SidebarSection::Courses => "课程",
+                    SidebarSection::Favorites => "收藏",
+                };
+                let arrow = if *collapsed { "▸" } else { "▾" };
+                div()
+                    .id(ElementId::Name(format!("section-{label}").into()))
+                    .h(px(40.0))
+                    .w_full()
+                    .flex_none()
+                    .px_3()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .bg(rgb(0xeef2f8))
+                    .border_t_1()
+                    .border_color(rgb(BORDER))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(rgb(0xe6ecf5)))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.toggle_sidebar_section(section, window, cx);
+                    }))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(div().text_sm().text_color(rgb(0x64748b)).child(arrow))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_sm()
+                                    .truncate()
+                                    .child(label),
+                            ),
+                    )
+                    .child(subtitle(format!("{count}")))
+                    .into_any_element()
+            }
             SidebarRow::Group {
                 term,
                 count,

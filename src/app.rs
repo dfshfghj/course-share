@@ -87,7 +87,7 @@ pub struct AppState {
     pub(crate) plaza_grid_scroll: ScrollHandle,
     pub(crate) plaza_detail_scroll: UniformListScrollHandle,
     pub(crate) collapsed_terms: HashSet<String>,
-    pub(crate) sidebar_section: SidebarSection,
+    pub(crate) collapsed_sections: HashSet<String>,
     pub(crate) starred_courses: HashSet<String>,
     pub(crate) favorite_selected: Option<String>,
     pub(crate) plaza_selected_course: Option<String>,
@@ -182,7 +182,7 @@ impl AppState {
             plaza_grid_scroll: ScrollHandle::new(),
             plaza_detail_scroll: UniformListScrollHandle::new(),
             collapsed_terms: HashSet::new(),
-            sidebar_section: SidebarSection::Courses,
+            collapsed_sections: HashSet::from(["favorites".to_string()]),
             starred_courses,
             favorite_selected: None,
             plaza_selected_course: None,
@@ -583,7 +583,7 @@ impl AppState {
         self.plaza_selected_course = None;
         self.favorite_selected = None;
         self.collapsed_terms.clear();
-        self.sidebar_section = SidebarSection::Courses;
+        self.collapsed_sections = HashSet::from(["favorites".to_string()]);
         self.pending_login = None;
         self.pending_haoxue_course = None;
         self.captcha_path = None;
@@ -638,6 +638,7 @@ impl AppState {
         let Some(course) = self.courses.get(index).cloned() else {
             return;
         };
+        self.tab = Tab::Courses;
         self.selected_course = Some(index);
         self.favorite_selected = None;
         self.replay_scroll = UniformListScrollHandle::new();
@@ -1474,19 +1475,35 @@ impl AppState {
         );
     }
 
-    pub(crate) fn set_sidebar_section(
+    pub(crate) fn toggle_sidebar_section(
         &mut self,
         section: SidebarSection,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.sidebar_section = section;
-        // Switching sections only changes the sidebar list. The right panel
-        // keeps the current course/favorite until the user clicks an item.
-        if section == SidebarSection::Favorites && self.favorite_shares.is_empty() && !self.busy {
+        let key = match section {
+            SidebarSection::Courses => "courses",
+            SidebarSection::Favorites => "favorites",
+        };
+        let was_collapsed = self.collapsed_sections.remove(key);
+        if !was_collapsed {
+            self.collapsed_sections.insert(key.to_string());
+        } else if section == SidebarSection::Favorites
+            && self.favorite_shares.is_empty()
+            && !self.busy
+        {
             self.refresh_shares(window, cx);
         }
-        self.course_scroll = UniformListScrollHandle::new();
+        cx.notify();
+    }
+
+    pub(crate) fn open_plaza(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.tab = Tab::Plaza;
+        self.refresh_plaza(window, cx);
+    }
+
+    pub(crate) fn open_settings(&mut self, cx: &mut Context<Self>) {
+        self.tab = Tab::Settings;
         cx.notify();
     }
 
