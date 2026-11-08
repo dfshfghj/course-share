@@ -2,10 +2,10 @@ use crate::app::{AppState, DownloadTask, DownloadTaskState, LoginMode};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputState};
 use gpui_component::Disableable as _;
-use gpui_component::IconName;
+use gpui_component::{IconName, Sizable as _};
 use gpui_kit::Focusable as _;
 use gpui_kit::prelude::*;
-use gpui_kit::{div, px, rgb, AnyElement, Context, ElementId, Entity, FontWeight, IntoElement, Render, Window};
+use gpui_kit::{div, px, rgb, AnyElement, Context, ElementId, Entity, FontWeight, IntoElement, MouseButton, Render, Window};
 
 pub(crate) const BG: u32 = 0xf3f5f9;
 pub(crate) const PANEL: u32 = 0xffffff;
@@ -470,9 +470,37 @@ impl Render for AppState {
             .child(
                 gpui_component::TitleBar::new().child(
                     div()
-                        .text_sm()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child("Course Share"),
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(
+                            Button::new("nav-back")
+                                .icon(IconName::ArrowLeft)
+                                .ghost()
+                                .small()
+                                .disabled(!self.can_go_back())
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.go_back(window, cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("nav-forward")
+                                .icon(IconName::ArrowRight)
+                                .ghost()
+                                .small()
+                                .disabled(!self.can_go_forward())
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.go_forward(window, cx);
+                                })),
+                        )
+                        .child(
+                            div()
+                                .pl_2()
+                                .text_sm()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child("Course Share"),
+                        ),
                 ),
             )
             .child(

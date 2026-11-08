@@ -25,6 +25,14 @@ pub enum Tab {
     Settings,
 }
 
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct NavState {
+    tab: Tab,
+    selected_course: Option<usize>,
+    favorite_selected: Option<String>,
+    plaza_selected_course: Option<String>,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum LoginMode {
     Password,
@@ -70,6 +78,8 @@ pub struct AppState {
     pub(crate) http: Option<Http>,
     pub(crate) config: AppConfig,
     pub(crate) tab: Tab,
+    pub(crate) nav_history: Vec<NavState>,
+    pub(crate) nav_index: usize,
     pub(crate) login_mode: LoginMode,
     pub(crate) username: Entity<InputState>,
     pub(crate) password: Entity<InputState>,
@@ -165,6 +175,8 @@ impl AppState {
             http: None,
             config,
             tab: Tab::Courses,
+            nav_history: Vec::new(),
+            nav_index: 0,
             login_mode: LoginMode::Password,
             username,
             password,
@@ -584,6 +596,8 @@ impl AppState {
         self.favorite_selected = None;
         self.collapsed_terms.clear();
         self.collapsed_sections = HashSet::from(["favorites".to_string()]);
+        self.nav_history.clear();
+        self.nav_index = 0;
         self.pending_login = None;
         self.pending_haoxue_course = None;
         self.captcha_path = None;
@@ -635,10 +649,22 @@ impl AppState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.navigate_to(
+            NavState {
+                tab: Tab::Courses,
+                selected_course: Some(index),
+                favorite_selected: None,
+                plaza_selected_course: None,
+            },
+            window,
+            cx,
+        );
+    }
+
+    fn show_course(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(course) = self.courses.get(index).cloned() else {
             return;
         };
-        self.tab = Tab::Courses;
         self.selected_course = Some(index);
         self.favorite_selected = None;
         self.replay_scroll = UniformListScrollHandle::new();
@@ -1497,14 +1523,114 @@ impl AppState {
         cx.notify();
     }
 
+    fn current_nav(&self) -> NavState {
+        NavState {
+            tab: self.tab,
+            selected_course: self.selected_course,
+            favorite_selected: self.favorite_selected.clone(),
+            plaza_selected_course: self.plaza_selected_course.clone(),
+        }
+    }
+
+    fn navigate_to(&mut self, next: NavState, window: &mut Window, cx: &mut Context<Self>) {
+        let current = self.current_nav();
+        if next == current {
+            return;
+        }
+        if self.nav_history.is_empty() {
+            self.nav_history.push(current);
+            self.nav_index = 0;
+        }
+        self.nav_history.truncate(self.nav_index + 1);
+        self.nav_history.push(next.clone());
+        self.nav_index = self.nav_history.len() - 1;
+        self.apply_nav(next, window, cx);
+    }
+
+    pub(crate) fn can_go_back(&self) -> bool {
+        self.nav_index > 0
+    }
+
+    pub(crate) fn can_go_forward(&self) -> bool {
+        !self.nav_history.is_empty() && self.nav_index + 1 < self.nav_history.len()
+    }
+
+    pub(crate) fn go_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.can_go_back() {
+            return;
+        }
+        self.nav_index -= 1;
+        let state = self.nav_history[self.nav_index].clone();
+        self.apply_nav(state, window, cx);
+    }
+
+    pub(crate) fn go_forward(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.can_go_forward() {
+            return;
+        }
+        self.nav_index += 1;
+        let state = self.nav_history[self.nav_index].clone();
+        self.apply_nav(state, window, cx);
+    }
+
+    fn apply_nav(&mut self, state: NavState, window: &mut Window, cx: &mut Context<Self>) {
+        self.tab = state.tab;
+        match state.tab {
+            Tab::Courses => {
+                if let Some(key) = state.favorite_selected {
+                    if self.favorite_selected.as_deref() != Some(key.as_str()) {
+                        self.show_favorite(key, window, cx);
+                    }
+                } else if let Some(index) = state.selected_course {
+                    if self.selected_course != Some(index) || self.favorite_selected.is_some() {
+                        self.show_course(index, window, cx);
+                    }
+                } else {
+                    self.favorite_selected = None;
+                }
+            }
+            Tab::Plaza => {
+                if let Some(key) = state.plaza_selected_course {
+                    if self.plaza_selected_course.as_deref() != Some(key.as_str()) {
+                        self.load_plaza_detail(key, window, cx);
+                    }
+                } else {
+                    self.plaza_selected_course = None;
+                    if self.plaza_courses.is_empty() {
+                        self.refresh_plaza(window, cx);
+                    }
+                }
+            }
+            Tab::Settings => {}
+        }
+        cx.notify();
+    }
+
     pub(crate) fn open_plaza(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.tab = Tab::Plaza;
+        self.navigate_to(
+            NavState {
+                tab: Tab::Plaza,
+                selected_course: self.selected_course,
+                favorite_selected: self.favorite_selected.clone(),
+                plaza_selected_course: None,
+            },
+            window,
+            cx,
+        );
         self.refresh_plaza(window, cx);
     }
 
-    pub(crate) fn open_settings(&mut self, cx: &mut Context<Self>) {
-        self.tab = Tab::Settings;
-        cx.notify();
+    pub(crate) fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.navigate_to(
+            NavState {
+                tab: Tab::Settings,
+                selected_course: self.selected_course,
+                favorite_selected: self.favorite_selected.clone(),
+                plaza_selected_course: self.plaza_selected_course.clone(),
+            },
+            window,
+            cx,
+        );
     }
 
     pub(crate) fn is_course_starred(&self, key: &str, name: &str) -> bool {
@@ -1538,7 +1664,19 @@ impl AppState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.tab = Tab::Courses;
+        self.navigate_to(
+            NavState {
+                tab: Tab::Courses,
+                selected_course: self.selected_course,
+                favorite_selected: Some(key),
+                plaza_selected_course: None,
+            },
+            window,
+            cx,
+        );
+    }
+
+    fn show_favorite(&mut self, key: String, window: &mut Window, cx: &mut Context<Self>) {
         let needs_shares = !self
             .favorite_shares
             .iter()
@@ -1640,6 +1778,20 @@ impl AppState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.navigate_to(
+            NavState {
+                tab: Tab::Plaza,
+                selected_course: self.selected_course,
+                favorite_selected: self.favorite_selected.clone(),
+                plaza_selected_course: Some(key),
+            },
+            window,
+            cx,
+        );
+    }
+
+    fn load_plaza_detail(&mut self, key: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.tab = Tab::Plaza;
         self.plaza_selected_course = Some(key.clone());
         self.plaza_detail_scroll = UniformListScrollHandle::new();
         self.plaza_shares.clear();
@@ -1693,11 +1845,6 @@ impl AppState {
                 cx.notify();
             },
         );
-    }
-
-    pub(crate) fn back_to_plaza_courses(&mut self, cx: &mut Context<Self>) {
-        self.plaza_selected_course = None;
-        cx.notify();
     }
 
     pub(crate) fn download_share(

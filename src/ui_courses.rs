@@ -263,8 +263,8 @@ impl AppState {
                     } else {
                         button.ghost()
                     };
-                    button.on_click(cx.listener(|this, _, _, cx| {
-                        this.open_settings(cx);
+                    button.on_click(cx.listener(|this, _, window, cx| {
+                        this.open_settings(window, cx);
                     }))
                 },
             )

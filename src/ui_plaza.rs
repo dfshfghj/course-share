@@ -1,6 +1,6 @@
 use crate::app::AppState;
 use crate::share::Share;
-use crate::ui::{subtitle, title, BORDER, MUTED, PANEL};
+use crate::ui::{subtitle, title, BORDER, MUTED, PANEL, PRIMARY};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::spinner::Spinner;
 use gpui_component::Disableable as _;
@@ -42,8 +42,9 @@ impl AppState {
                 meta.push(course.teacher.clone());
             }
             let mut card = div()
+                .id(ElementId::Name(format!("plaza-card-{index}").into()))
                 .w(px(300.0))
-                .min_h(px(146.0))
+                .min_h(px(128.0))
                 .p_4()
                 .flex()
                 .flex_col()
@@ -52,6 +53,11 @@ impl AppState {
                 .border_1()
                 .border_color(rgb(BORDER))
                 .rounded_sm()
+                .cursor_pointer()
+                .hover(|style| style.border_color(rgb(PRIMARY)))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.select_plaza_course(key_for_open.clone(), window, cx);
+                }))
                 .child(
                     div()
                         .flex()
@@ -73,6 +79,7 @@ impl AppState {
                             .label(star_label)
                             .ghost()
                             .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
                                 this.toggle_star_course(
                                     key_for_star.clone(),
                                     name_for_star.clone(),
@@ -85,18 +92,6 @@ impl AppState {
                 card = card.child(subtitle(meta.join(" · ")));
             }
             card = card.child(subtitle(format!("{} 条回放", course.count)));
-            card = card.child(
-                div().flex().justify_end().child(
-                    Button::new(ElementId::Name(
-                        format!("plaza-open-{index}").into(),
-                    ))
-                    .label("查看回放")
-                    .primary()
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.select_plaza_course(key_for_open.clone(), window, cx);
-                    })),
-                ),
-            );
             cards.push(card.into_any_element());
         }
 
@@ -276,14 +271,6 @@ impl AppState {
                             .flex()
                             .items_center()
                             .gap_3()
-                            .child(
-                                Button::new("plaza-back")
-                                    .label("← 返回")
-                                    .ghost()
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.back_to_plaza_courses(cx);
-                                    })),
-                            )
                             .child(title(course.course_name.clone()))
                             .child(
                                 div()
