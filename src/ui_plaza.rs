@@ -11,94 +11,28 @@ use gpui_kit::{
     ScrollWheelEvent, Window,
 };
 
-struct PlazaCourse {
-    key: String,
-    name: String,
-    term: String,
-    teacher: String,
-    shares: Vec<Share>,
-}
-
 impl AppState {
-    fn share_groups(&self) -> Vec<(String, Vec<Share>)> {
-        let mut groups: Vec<(String, Vec<Share>)> = Vec::new();
-        for share in &self.shares {
-            let key = share.course_key();
-            if let Some((_, items)) = groups.iter_mut().find(|(existing, _)| *existing == key) {
-                items.push(share.clone());
-            } else {
-                groups.push((key, vec![share.clone()]));
-            }
-        }
-        groups
-    }
-
-    fn plaza_course_groups(&self) -> Vec<PlazaCourse> {
-        self.share_groups()
-            .into_iter()
-            .map(|(key, mut shares)| {
-                shares.sort_by(|a, b| {
-                    let time = |share: &Share| {
-                        let raw = if share.record_time.is_empty() {
-                            share.record_date.as_str()
-                        } else {
-                            share.record_time.as_str()
-                        };
-                        crate::blackboard::sortable_time(raw)
-                    };
-                    time(b)
-                        .cmp(&time(a))
-                        .then_with(|| b.replay_title.cmp(&a.replay_title))
-                });
-                let name = shares
-                    .first()
-                    .map(|share| share.course_name.clone())
-                    .unwrap_or_default();
-                let term = shares
-                    .iter()
-                    .find(|share| !share.term.is_empty())
-                    .map(|share| share.term.clone())
-                    .unwrap_or_default();
-                let teacher = shares
-                    .iter()
-                    .find(|share| !share.teacher.is_empty())
-                    .map(|share| share.teacher.clone())
-                    .unwrap_or_default();
-                PlazaCourse {
-                    key,
-                    name,
-                    term,
-                    teacher,
-                    shares,
-                }
-            })
-            .collect()
-    }
-
     pub(crate) fn plaza_view(
         &self,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let courses = self.plaza_course_groups();
-        let selected = self
-            .plaza_selected_course
-            .as_ref()
-            .and_then(|key| courses.iter().find(|course| &course.key == key));
-        if let Some(course) = selected {
-            self.plaza_detail(course, cx).into_any_element()
-        } else {
-            self.plaza_grid(courses, cx).into_any_element()
+        if let Some(key) = self.plaza_selected_course.as_ref() {
+            if let Some(course) = self.plaza_courses.iter().find(|course| &course.key == key) {
+                return self.plaza_detail(course, cx).into_any_element();
+            }
         }
+        self.plaza_grid(cx).into_any_element()
     }
 
-    fn plaza_grid(&self, courses: Vec<PlazaCourse>, cx: &mut Context<Self>) -> impl IntoElement {
+    fn plaza_grid(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let courses = &self.plaza_courses;
         let mut cards = Vec::new();
         for (index, course) in courses.iter().enumerate() {
-            let starred = self.is_course_starred(&course.key, &course.name);
+            let starred = self.is_course_starred(&course.key, &course.course_name);
             let star_label = if starred { "★" } else { "☆" };
             let key_for_star = course.key.clone();
-            let name_for_star = course.name.clone();
+            let name_for_star = course.course_name.clone();
             let key_for_open = course.key.clone();
             let mut meta = Vec::new();
             if !course.term.is_empty() {
@@ -130,7 +64,7 @@ impl AppState {
                                 .min_w_0()
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .truncate()
-                                .child(course.name.clone()),
+                                .child(course.course_name.clone()),
                         )
                         .child(
                             Button::new(ElementId::Name(
@@ -150,7 +84,7 @@ impl AppState {
             if !meta.is_empty() {
                 card = card.child(subtitle(meta.join(" · ")));
             }
-            card = card.child(subtitle(format!("{} 条回放", course.shares.len())));
+            card = card.child(subtitle(format!("{} 条回放", course.count)));
             card = card.child(
                 div().flex().justify_end().child(
                     Button::new(ElementId::Name(
@@ -158,8 +92,8 @@ impl AppState {
                     ))
                     .label("查看回放")
                     .primary()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.select_plaza_course(key_for_open.clone(), cx);
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.select_plaza_course(key_for_open.clone(), window, cx);
                     })),
                 ),
             );
@@ -272,7 +206,7 @@ impl AppState {
                                             this.child(
                                                 div().flex().justify_center().child(subtitle(
                                                     format!(
-                                                        "已加载全部 {} 条",
+                                                        "已加载全部 {} 门课程",
                                                         self.plaza_total
                                                     ),
                                                 )),
@@ -298,9 +232,13 @@ impl AppState {
             })
     }
 
-    fn plaza_detail(&self, course: &PlazaCourse, cx: &mut Context<Self>) -> impl IntoElement {
-        let count = course.shares.len();
-        let shares_for_list = course.shares.clone();
+    fn plaza_detail(
+        &self,
+        course: &crate::share::CourseGroup,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let count = self.plaza_shares.len();
+        let shares_for_list = self.plaza_shares.clone();
         let view = cx.entity().downgrade();
         let list = uniform_list("plaza-replay-list", count, move |range, _, cx| {
             let shares = shares_for_list.clone();
@@ -315,10 +253,10 @@ impl AppState {
         .min_h_0()
         .track_scroll(&self.plaza_detail_scroll);
 
-        let starred = self.is_course_starred(&course.key, &course.name);
+        let starred = self.is_course_starred(&course.key, &course.course_name);
         let star_label = if starred { "★" } else { "☆" };
         let key_for_star = course.key.clone();
-        let name_for_star = course.name.clone();
+        let name_for_star = course.course_name.clone();
         div()
             .size_full()
             .flex()
@@ -346,11 +284,11 @@ impl AppState {
                                         this.back_to_plaza_courses(cx);
                                     })),
                             )
-                            .child(title(course.name.clone()))
+                            .child(title(course.course_name.clone()))
                             .child(
                                 div()
                                     .flex_none()
-                                    .child(subtitle(format!("{count} 条回放"))),
+                                    .child(subtitle(format!("{} 条回放", course.count))),
                             ),
                     )
                     .child(
@@ -378,6 +316,30 @@ impl AppState {
                         &self.plaza_detail_scroll,
                     )),
             )
+            .when(self.plaza_detail_loading && count == 0, |this| {
+                this.child(
+                    div()
+                        .h(px(44.0))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .gap_2()
+                        .child(Spinner::new().small())
+                        .child(subtitle("正在加载回放…")),
+                )
+            })
+            .when(!self.plaza_detail_loading && count == 0, |this| {
+                this.child(
+                    div()
+                        .h(px(44.0))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(subtitle("该课程暂时没有可下载的回放。")),
+                )
+            })
     }
 
     fn plaza_replay_row(

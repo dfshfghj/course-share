@@ -4,7 +4,7 @@ use crate::config::AppConfig;
 use crate::download::{DownloadControl, DownloadEvent};
 use crate::http::Http;
 use crate::media::{self, MediaCandidate};
-use crate::share::{Share, ShareClient};
+use crate::share::{CourseGroup, Share, ShareClient};
 use gpui_component::input::{InputEvent, InputState};
 use gpui_kit::prelude::*;
 use gpui_kit::{Context, Entity, ScrollHandle, UniformListScrollHandle, Window};
@@ -102,7 +102,9 @@ pub struct AppState {
     pub(crate) replays_loading: bool,
     pub(crate) replays_loading_label: String,
     pub(crate) pending_haoxue_course: Option<Course>,
-    pub(crate) shares: Vec<Share>,
+    pub(crate) plaza_courses: Vec<CourseGroup>,
+    pub(crate) plaza_shares: Vec<Share>,
+    pub(crate) plaza_detail_loading: bool,
     pub(crate) favorite_shares: Vec<Share>,
     pub(crate) plaza_loading_more: bool,
     pub(crate) plaza_has_more: bool,
@@ -195,7 +197,9 @@ impl AppState {
             replays_loading: false,
             replays_loading_label: "正在加载回放…".to_string(),
             pending_haoxue_course: None,
-            shares: Vec::new(),
+            plaza_courses: Vec::new(),
+            plaza_shares: Vec::new(),
+            plaza_detail_loading: false,
             favorite_shares: Vec::new(),
             plaza_loading_more: false,
             plaza_has_more: false,
@@ -568,7 +572,9 @@ impl AppState {
         self.http = None;
         self.courses.clear();
         self.replays.clear();
-        self.shares.clear();
+        self.plaza_courses.clear();
+        self.plaza_shares.clear();
+        self.plaza_detail_loading = false;
         self.favorite_shares.clear();
         self.plaza_loading_more = false;
         self.plaza_has_more = false;
@@ -1395,18 +1401,18 @@ impl AppState {
         self.run_blocking(
             window,
             cx,
-            move || ShareClient::new(&backend)?.list_page(&query, PLAZA_PAGE_SIZE, 0),
+            move || ShareClient::new(&backend)?.list_courses_page(&query, PLAZA_PAGE_SIZE, 0),
             |this, result, _window, cx| {
                 this.busy = false;
                 match result {
-                    Ok((shares, total)) => {
-                        this.shares = shares;
+                    Ok((courses, total)) => {
+                        this.plaza_courses = courses;
                         this.plaza_total = total;
-                        this.plaza_has_more = this.shares.len() < total;
-                        this.status = format!("广场 {} 条", total);
+                        this.plaza_has_more = this.plaza_courses.len() < total;
+                        this.status = format!("广场 {} 门课程", total);
                     }
                     Err(error) => {
-                        this.shares.clear();
+                        this.plaza_courses.clear();
                         this.plaza_has_more = false;
                         this.error = Some(format!("{error:#}"));
                         this.status = "广场加载失败".to_string();
@@ -1423,14 +1429,17 @@ impl AppState {
         }
         let query = self.plaza_search.read(cx).value().trim().to_string();
         let backend = self.config.backend_url.clone();
-        let offset = self.shares.len();
+        let offset = self.plaza_courses.len();
         let query_for_work = query.clone();
         self.plaza_loading_more = true;
         cx.notify();
         self.run_blocking(
             window,
             cx,
-            move || ShareClient::new(&backend)?.list_page(&query_for_work, PLAZA_PAGE_SIZE, offset),
+            move || {
+                ShareClient::new(&backend)?
+                    .list_courses_page(&query_for_work, PLAZA_PAGE_SIZE, offset)
+            },
             move |this, result, _window, cx| {
                 this.plaza_loading_more = false;
                 let current_query = this.plaza_search.read(cx).value().trim().to_string();
@@ -1440,16 +1449,20 @@ impl AppState {
                 }
                 match result {
                     Ok((page, total)) => {
-                        let before = this.shares.len();
-                        for share in page {
-                            if !this.shares.iter().any(|existing| existing.id == share.id) {
-                                this.shares.push(share);
+                        let before = this.plaza_courses.len();
+                        for course in page {
+                            if !this
+                                .plaza_courses
+                                .iter()
+                                .any(|existing| existing.key == course.key)
+                            {
+                                this.plaza_courses.push(course);
                             }
                         }
                         this.plaza_total = total;
                         this.plaza_has_more =
-                            this.shares.len() < total && this.shares.len() > before;
-                        this.status = format!("广场 {} 条", total);
+                            this.plaza_courses.len() < total && this.plaza_courses.len() > before;
+                        this.status = format!("广场 {} 门课程", total);
                     }
                     Err(error) => {
                         this.plaza_has_more = false;
@@ -1604,10 +1617,65 @@ impl AppState {
         cx.notify();
     }
 
-    pub(crate) fn select_plaza_course(&mut self, key: String, cx: &mut Context<Self>) {
-        self.plaza_selected_course = Some(key);
+    pub(crate) fn select_plaza_course(
+        &mut self,
+        key: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.plaza_selected_course = Some(key.clone());
         self.plaza_detail_scroll = UniformListScrollHandle::new();
+        self.plaza_shares.clear();
+        self.plaza_detail_loading = true;
+        self.error = None;
+        let backend = self.config.backend_url.clone();
+        let group = self
+            .plaza_courses
+            .iter()
+            .find(|course| course.key == key)
+            .cloned();
         cx.notify();
+        let Some(group) = group else {
+            self.plaza_detail_loading = false;
+            cx.notify();
+            return;
+        };
+        self.run_blocking(
+            window,
+            cx,
+            move || {
+                ShareClient::new(&backend)?
+                    .list_course_shares(&group.course_id, &group.course_name)
+            },
+            move |this, result, _window, cx| {
+                if this.plaza_selected_course.as_deref() != Some(key.as_str()) {
+                    return;
+                }
+                this.plaza_detail_loading = false;
+                match result {
+                    Ok(mut shares) => {
+                        shares.sort_by(|a, b| {
+                            let time = |share: &Share| {
+                                let raw = if share.record_time.is_empty() {
+                                    share.record_date.as_str()
+                                } else {
+                                    share.record_time.as_str()
+                                };
+                                crate::blackboard::sortable_time(raw)
+                            };
+                            time(b)
+                                .cmp(&time(a))
+                                .then_with(|| b.replay_title.cmp(&a.replay_title))
+                        });
+                        this.plaza_shares = shares;
+                    }
+                    Err(error) => {
+                        this.error = Some(format!("加载课程回放失败：{error:#}"));
+                    }
+                }
+                cx.notify();
+            },
+        );
     }
 
     pub(crate) fn back_to_plaza_courses(&mut self, cx: &mut Context<Self>) {

@@ -102,6 +102,24 @@ fn record_date_from_url(url: &str) -> String {
     String::new()
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct CourseGroup {
+    #[serde(default)]
+    pub key: String,
+    #[serde(default)]
+    pub course_id: String,
+    #[serde(default)]
+    pub course_name: String,
+    #[serde(default)]
+    pub teacher: String,
+    #[serde(default)]
+    pub term: String,
+    #[serde(default)]
+    pub count: usize,
+    #[serde(default)]
+    pub downloads: i64,
+}
+
 #[derive(Clone)]
 pub struct ShareClient {
     base_url: String,
@@ -134,12 +152,30 @@ impl ShareClient {
         limit: usize,
         offset: usize,
     ) -> Result<(Vec<Share>, usize)> {
+        self.list_page_filtered(query, "", "", limit, offset)
+    }
+
+    fn list_page_filtered(
+        &self,
+        query: &str,
+        course_id: &str,
+        course_name: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<(Vec<Share>, usize)> {
         let mut url = Url::parse(&format!("{}/api/shares", self.base_url))
             .with_context(|| format!("invalid backend URL {}", self.base_url))?;
         url.query_pairs_mut()
             .append_pair("limit", &limit.to_string())
             .append_pair("offset", &offset.to_string())
             .append_pair("q", query);
+        if !course_id.trim().is_empty() {
+            url.query_pairs_mut()
+                .append_pair("course_id", course_id.trim());
+        } else if !course_name.trim().is_empty() {
+            url.query_pairs_mut()
+                .append_pair("name", course_name.trim());
+        }
         let response = self
             .client
             .get(url.as_str())
@@ -158,6 +194,55 @@ impl ShareClient {
             .map(|value| value as usize)
             .unwrap_or(page.len());
         Ok((page, total))
+    }
+
+    pub fn list_courses_page(
+        &self,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<(Vec<CourseGroup>, usize)> {
+        let mut url = Url::parse(&format!("{}/api/courses", self.base_url))
+            .with_context(|| format!("invalid backend URL {}", self.base_url))?;
+        url.query_pairs_mut()
+            .append_pair("limit", &limit.to_string())
+            .append_pair("offset", &offset.to_string())
+            .append_pair("q", query);
+        let response = self
+            .client
+            .get(url.as_str())
+            .send()
+            .with_context(|| format!("GET {}", url.as_str()))?;
+        let value = parse_json(response)?;
+        let courses = value
+            .get("courses")
+            .cloned()
+            .unwrap_or_else(|| serde_json::Value::Array(Vec::new()));
+        let page: Vec<CourseGroup> =
+            serde_json::from_value(courses).context("parse course list")?;
+        let total = value
+            .get("total")
+            .and_then(|value| value.as_u64())
+            .map(|value| value as usize)
+            .unwrap_or(page.len());
+        Ok((page, total))
+    }
+
+    pub fn list_course_shares(&self, course_id: &str, course_name: &str) -> Result<Vec<Share>> {
+        const PAGE: usize = 500;
+        let mut all = Vec::new();
+        let mut offset = 0usize;
+        for _ in 0..100 {
+            let (page, total) =
+                self.list_page_filtered("", course_id, course_name, PAGE, offset)?;
+            let count = page.len();
+            all.extend(page);
+            if count < PAGE || all.len() >= total {
+                break;
+            }
+            offset += count;
+        }
+        Ok(all)
     }
 
     pub fn list(&self, query: &str) -> Result<Vec<Share>> {

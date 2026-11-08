@@ -100,10 +100,10 @@ impl AppState {
                                 self.config.download_path().display()
                             )))
                             .child(subtitle(format!(
-                                "已保存课程：{} 门 / 当前回放：{} 条 / 广场：{} 条",
+                                "已保存课程：{} 门 / 当前回放：{} 条 / 广场课程：{} 门",
                                 self.courses.len(),
                                 self.replays.len(),
-                                self.shares.len()
+                                self.plaza_courses.len()
                             ))),
                     )
                     .when_some(self.error.clone(), |this, error| {
