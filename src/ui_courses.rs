@@ -649,6 +649,14 @@ impl AppState {
             _ => button.primary().disabled(self.busy),
         };
         let replay_for_download = replay.clone();
+        let replay_for_preview = replay.clone();
+        let preview = Button::new(ElementId::Name(format!("preview-{index}").into()))
+            .label("预览")
+            .ghost()
+            .disabled(replay.media.is_empty())
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.preview_replay(replay_for_preview.clone(), cx);
+            }));
         let lesson = if replay.sub_title.is_empty() {
             replay.replay_id.clone()
         } else {
@@ -687,9 +695,16 @@ impl AppState {
                     .truncate()
                     .child(time),
             )
-            .child(button.on_click(cx.listener(move |this, _, window, cx| {
-                this.download_replay(replay_for_download.clone(), window, cx);
-            })))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(preview)
+                    .child(button.on_click(cx.listener(move |this, _, window, cx| {
+                        this.download_replay(replay_for_download.clone(), window, cx);
+                    }))),
+            )
             .into_any_element()
     }
 }

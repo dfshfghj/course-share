@@ -860,6 +860,53 @@ impl AppState {
         )
     }
 
+    pub(crate) fn preview_replay(&mut self, replay: Replay, cx: &mut Context<Self>) {
+        let Some(http) = self.http.clone() else {
+            self.error = Some("请先登录".to_string());
+            cx.notify();
+            return;
+        };
+        let Some(candidate) = replay.media.first() else {
+            self.error = Some("该回放没有可用媒体地址".to_string());
+            cx.notify();
+            return;
+        };
+        match crate::preview::open(http, replay.display_title(), candidate.url.clone()) {
+            Ok(()) => {
+                self.error = None;
+                self.status = "已在系统浏览器打开预览".to_string();
+            }
+            Err(error) => {
+                self.error = Some(format!("打开预览失败：{error:#}"));
+            }
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn preview_share(&mut self, share: Share, cx: &mut Context<Self>) {
+        let Some(http) = self.http.clone() else {
+            self.error = Some("请先登录".to_string());
+            cx.notify();
+            return;
+        };
+        if share.m3u8_url.is_empty() {
+            self.error = Some("这条分享没有媒体地址".to_string());
+            cx.notify();
+            return;
+        }
+        let title = format!("{} · {}", share.course_name, share.replay_title);
+        match crate::preview::open(http, title, share.m3u8_url.clone()) {
+            Ok(()) => {
+                self.error = None;
+                self.status = "已在系统浏览器打开预览".to_string();
+            }
+            Err(error) => {
+                self.error = Some(format!("打开预览失败：{error:#}"));
+            }
+        }
+        cx.notify();
+    }
+
     pub(crate) fn download_replay(
         &mut self,
         replay: Replay,

@@ -11,6 +11,7 @@ mod haoxue;
 mod http;
 mod media;
 mod onlineroomse;
+mod preview;
 mod share;
 mod ui;
 mod ui_courses;

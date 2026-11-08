@@ -200,6 +200,7 @@ jobs:
           cp "target/release/${{ matrix.app_exe }}" "dist/$name/"
           cp "vendor/ffmpeg-minimal/${{ matrix.target }}/bin/${{ matrix.ffmpeg_exe }}" "dist/$name/"
           cp vendor/ffmpeg-minimal/${{ matrix.target }}/COPYING* "dist/$name/licenses/" 2>/dev/null || true
+          cp assets/hls.LICENSE "dist/$name/licenses/" 2>/dev/null || true
           cat > "dist/$name/README.txt" <<'EOF'
           Course Share
           ============

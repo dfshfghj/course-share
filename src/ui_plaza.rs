@@ -374,6 +374,7 @@ impl AppState {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let share_for_download = share.clone();
+        let share_for_preview = share.clone();
         let url_for_copy = share.m3u8_url.clone();
         let time = if !share.record_time.trim().is_empty() {
             share.record_time.clone()
@@ -416,6 +417,17 @@ impl AppState {
                     .items_center()
                     .gap_2()
                     .child(subtitle(format!("下载 {}", share.downloads)))
+                    .child(
+                        Button::new(ElementId::Name(
+                            format!("plaza-preview-{index}").into(),
+                        ))
+                        .label("预览")
+                        .ghost()
+                        .disabled(share.m3u8_url.is_empty())
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.preview_share(share_for_preview.clone(), cx);
+                        })),
+                    )
                     .child(
                         Button::new(ElementId::Name(
                             format!("plaza-download-{index}").into(),
