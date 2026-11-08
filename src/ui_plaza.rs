@@ -348,16 +348,31 @@ impl AppState {
                             ),
                     )
                     .child(
-                        Button::new("plaza-detail-star")
-                            .label(star_label)
-                            .ghost()
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.toggle_star_course(
-                                    key_for_star.clone(),
-                                    name_for_star.clone(),
-                                    cx,
-                                );
-                            })),
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                Button::new("plaza-detail-download-all")
+                                    .label("下载全部")
+                                    .primary()
+                                    .disabled(self.plaza_shares.is_empty())
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.download_plaza_course(window, cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new("plaza-detail-star")
+                                    .label(star_label)
+                                    .ghost()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.toggle_star_course(
+                                            key_for_star.clone(),
+                                            name_for_star.clone(),
+                                            cx,
+                                        );
+                                    })),
+                            ),
                     ),
             )
             .child(

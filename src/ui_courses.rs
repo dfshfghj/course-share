@@ -1,7 +1,7 @@
 use crate::app::{AppState, SidebarSection, Tab};
 use crate::smooth_scroll::SmoothTarget;
 use crate::theme::tone;
-use crate::ui::{subtitle, title, BORDER, DANGER, MUTED, PANEL, PRIMARY, PRIMARY_SOFT, SUCCESS};
+use crate::ui::{subtitle, title, BORDER, DANGER, MUTED, PANEL, PRIMARY, PRIMARY_SOFT, SUCCESS, TEXT};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::spinner::Spinner;
 use gpui_component::Disableable as _;
@@ -228,7 +228,7 @@ impl AppState {
                     } else {
                         FontWeight::NORMAL
                     })
-                    .text_color(if selected { tone(PRIMARY) } else { tone(MUTED) })
+                    .text_color(if selected { tone(PRIMARY) } else { tone(TEXT) })
                     .child("广场"),
             )
             .into_any_element()
@@ -288,24 +288,21 @@ impl AppState {
             } => {
                 let section = *section;
                 let label = match section {
-                    SidebarSection::Courses => "课程",
-                    SidebarSection::Favorites => "收藏",
+                    SidebarSection::Courses => "我的课程",
+                    SidebarSection::Favorites => "关注",
                 };
-                let arrow = if *collapsed { "▸" } else { "▾" };
                 div()
                     .id(ElementId::Name(format!("section-{label}").into()))
                     .h(px(40.0))
                     .w_full()
                     .flex_none()
-                    .px_3()
+                    .pl_3()
+                    .pr_3()
                     .flex()
                     .items_center()
                     .justify_between()
-                    .bg(tone(0xeef2f8))
-                    .border_t_1()
-                    .border_color(tone(BORDER))
                     .cursor_pointer()
-                    .hover(|style| style.bg(tone(0xe6ecf5)))
+                    .hover(|style| style.bg(tone(0xf1f5f9)))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.toggle_sidebar_section(section, window, cx);
                     }))
@@ -313,21 +310,19 @@ impl AppState {
                         div()
                             .flex_1()
                             .min_w_0()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(div().text_sm().text_color(tone(0x64748b)).child(arrow))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_sm()
-                                    .truncate()
-                                    .child(label),
-                            ),
+                            .truncate()
+                            .text_sm()
+                            .text_color(tone(MUTED))
+                            .child(label),
                     )
                     .child(subtitle(format!("{count}")))
+                    .child(
+                        div().pl_2().text_color(tone(MUTED)).child(if *collapsed {
+                            IconName::ChevronRight
+                        } else {
+                            IconName::ChevronDown
+                        }),
+                    )
                     .into_any_element()
             }
             SidebarRow::Group {
@@ -336,17 +331,16 @@ impl AppState {
                 collapsed,
             } => {
                 let term_for_click = term.clone();
-                let arrow = if *collapsed { "▸" } else { "▾" };
                 div()
                     .id(ElementId::Name(format!("term-{term}").into()))
                     .h(px(36.0))
                     .w_full()
                     .flex_none()
-                    .px_4()
+                    .pl_6()
+                    .pr_4()
                     .flex()
                     .items_center()
                     .justify_between()
-                    .bg(tone(0xf8fafc))
                     .cursor_pointer()
                     .hover(|style| style.bg(tone(0xf1f5f9)))
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -356,21 +350,19 @@ impl AppState {
                         div()
                             .flex_1()
                             .min_w_0()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(div().text_sm().text_color(tone(0x64748b)).child(arrow))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_sm()
-                                    .truncate()
-                                    .child(term.clone()),
-                            ),
+                            .truncate()
+                            .text_sm()
+                            .text_color(tone(TEXT))
+                            .child(term.clone()),
                     )
                     .child(subtitle(format!("{count}")))
+                    .child(
+                        div().pl_2().text_color(tone(MUTED)).child(if *collapsed {
+                            IconName::ChevronRight
+                        } else {
+                            IconName::ChevronDown
+                        }),
+                    )
                     .into_any_element()
             }
             SidebarRow::Enrolled(index) => {
@@ -416,7 +408,7 @@ impl AppState {
             .h(px(36.0))
             .w_full()
             .flex_none()
-            .pl(px(28.0))
+            .pl(px(40.0))
             .pr_4()
             .flex()
             .items_center()

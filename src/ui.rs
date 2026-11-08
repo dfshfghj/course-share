@@ -481,7 +481,10 @@ impl Render for AppState {
             .bg(tone(BG))
             .text_color(tone(TEXT))
             .child(
-                gpui_component::TitleBar::new().child(
+                gpui_component::TitleBar::new()
+                    .bg(tone(PANEL))
+                    .border_color(tone(BORDER))
+                    .child(
                     div()
                         .flex()
                         .items_center()

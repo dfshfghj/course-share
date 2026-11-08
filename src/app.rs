@@ -1941,25 +1941,7 @@ impl AppState {
             cx.notify();
             return;
         }
-        let kind = media::classify_media_url(&share.m3u8_url).to_string();
-        let candidate = MediaCandidate {
-            url: share.m3u8_url.clone(),
-            kind,
-            label: "广场".to_string(),
-            quality: media::score_vod_url(&share.m3u8_url),
-            guid: share.guid.clone(),
-        };
-        let replay = Replay {
-            course_id: share.course_id.clone(),
-            course_name: share.course_name.clone(),
-            replay_id: share.guid.clone(),
-            sub_title: share.replay_title.clone(),
-            lecturer: share.teacher.clone(),
-            record_time: share.record_date.clone(),
-            page_url: String::new(),
-            media: vec![candidate],
-            guid: share.guid.clone(),
-        };
+        let replay = Self::replay_from_share(&share);
         let backend = self.config.backend_url.clone();
         let id = share.id.clone();
         self.run_blocking(
@@ -1969,6 +1951,45 @@ impl AppState {
             |_this, _result, _window, _cx| {},
         );
         self.download_many(vec![replay], window, cx);
+    }
+
+    pub(crate) fn download_plaza_course(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.plaza_shares.is_empty() {
+            self.status = "该课程暂时没有可下载的回放".to_string();
+            cx.notify();
+            return;
+        }
+        let replays: Vec<Replay> = self.plaza_shares.iter().map(Self::replay_from_share).collect();
+        let backend = self.config.backend_url.clone();
+        let ids: Vec<String> = self
+            .plaza_shares
+            .iter()
+            .filter(|share| {
+                let replay = Self::replay_from_share(share);
+                !self.replay_downloaded(&replay)
+                    && !self.active_downloads.contains(&replay.identity())
+            })
+            .map(|share| share.id.clone())
+            .filter(|id| !id.is_empty())
+            .collect();
+        if !ids.is_empty() {
+            self.run_background(
+                cx,
+                move || {
+                    let client = ShareClient::new(&backend)?;
+                    for id in ids {
+                        let _ = client.mark_download(&id);
+                    }
+                    Ok::<(), anyhow::Error>(())
+                },
+                |_this, _result, _cx| {},
+            );
+        }
+        self.download_many(replays, window, cx);
     }
 
     pub(crate) fn save_settings(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
@@ -2037,6 +2058,28 @@ impl AppState {
         cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text));
         self.status = "已复制到剪贴板".to_string();
         cx.notify();
+    }
+
+    fn replay_from_share(share: &Share) -> Replay {
+        let kind = media::classify_media_url(&share.m3u8_url).to_string();
+        let candidate = MediaCandidate {
+            url: share.m3u8_url.clone(),
+            kind,
+            label: "广场".to_string(),
+            quality: media::score_vod_url(&share.m3u8_url),
+            guid: share.guid.clone(),
+        };
+        Replay {
+            course_id: share.course_id.clone(),
+            course_name: share.course_name.clone(),
+            replay_id: share.guid.clone(),
+            sub_title: share.replay_title.clone(),
+            lecturer: share.teacher.clone(),
+            record_time: share.record_date.clone(),
+            page_url: String::new(),
+            media: vec![candidate],
+            guid: share.guid.clone(),
+        }
     }
 
     pub(crate) fn selected_course(&self) -> Option<&Course> {
