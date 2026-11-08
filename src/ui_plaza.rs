@@ -1,21 +1,23 @@
 use crate::app::AppState;
 use crate::share::Share;
+use crate::smooth_scroll::{SmoothTarget, SmoothWheel};
 use crate::theme::tone;
 use crate::ui::{subtitle, title, BORDER, MUTED, PANEL, PRIMARY};
 use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::IconName;
 use gpui_component::spinner::Spinner;
 use gpui_component::Disableable as _;
 use gpui_component::Sizable as _;
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    div, px, uniform_list, AnyElement, Context, ElementId, FontWeight, IntoElement,
-    ScrollWheelEvent, Window,
+    div, px, uniform_list, AnyElement, Context, ElementId, FontWeight, IntoElement, Window,
 };
+use std::rc::Rc;
 
 impl AppState {
     pub(crate) fn plaza_view(
         &self,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         if let Some(key) = self.plaza_selected_course.as_ref() {
@@ -23,80 +25,133 @@ impl AppState {
                 return self.plaza_detail(course, cx).into_any_element();
             }
         }
-        self.plaza_grid(cx).into_any_element()
+        self.plaza_grid(window, cx).into_any_element()
     }
 
-    fn plaza_grid(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let courses = &self.plaza_courses;
-        let mut cards = Vec::new();
-        for (index, course) in courses.iter().enumerate() {
-            let starred = self.is_course_starred(&course.key, &course.course_name);
-            let star_label = if starred { "★" } else { "☆" };
-            let key_for_star = course.key.clone();
-            let name_for_star = course.course_name.clone();
-            let key_for_open = course.key.clone();
-            let mut meta = Vec::new();
-            if !course.term.is_empty() {
-                meta.push(course.term.clone());
-            }
-            if !course.teacher.is_empty() {
-                meta.push(course.teacher.clone());
-            }
-            let mut card = div()
-                .id(ElementId::Name(format!("plaza-card-{index}").into()))
-                .w(px(300.0))
-                .min_h(px(128.0))
-                .p_4()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .bg(tone(PANEL))
-                .border_1()
-                .border_color(tone(BORDER))
-                .rounded_sm()
-                .cursor_pointer()
-                .hover(|style| style.border_color(tone(PRIMARY)))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.select_plaza_course(key_for_open.clone(), window, cx);
-                }))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .gap_2()
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .truncate()
-                                .child(course.course_name.clone()),
-                        )
-                        .child(
-                            Button::new(ElementId::Name(
-                                format!("plaza-star-{index}").into(),
-                            ))
-                            .label(star_label)
-                            .ghost()
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                cx.stop_propagation();
-                                this.toggle_star_course(
-                                    key_for_star.clone(),
-                                    name_for_star.clone(),
-                                    cx,
-                                );
-                            })),
-                        ),
-                );
-            if !meta.is_empty() {
-                card = card.child(subtitle(meta.join(" · ")));
-            }
-            card = card.child(subtitle(format!("{} 条回放", course.count)));
-            cards.push(card.into_any_element());
+    fn plaza_grid(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let courses = self.plaza_courses.clone();
+        let columns = plaza_columns(window);
+        let row_count = if courses.is_empty() {
+            0
+        } else {
+            courses.len().div_ceil(columns)
+        };
+        let total = self.plaza_total;
+        let footer = if courses.is_empty() {
+            None
+        } else if self.plaza_loading_more {
+            Some(PlazaFooter::Loading)
+        } else if self.plaza_has_more {
+            Some(PlazaFooter::LoadMore)
+        } else {
+            Some(PlazaFooter::Done)
+        };
+        let mut sizes = vec![gpui_kit::size(px(300.0), px(144.0)); row_count];
+        if let Some(kind) = footer {
+            sizes.push(gpui_kit::size(
+                px(300.0),
+                px(match kind {
+                    PlazaFooter::Loading => 44.0,
+                    PlazaFooter::LoadMore => 52.0,
+                    PlazaFooter::Done => 40.0,
+                }),
+            ));
         }
+        let courses_for_list = std::rc::Rc::new(courses.clone());
+        let list = gpui_kit::base::v_virtual_list(
+            cx.entity(),
+            "plaza-virtual-grid",
+            std::rc::Rc::new(sizes),
+            move |this, range, _, cx| {
+                let courses = courses_for_list.clone();
+                range
+                    .map(|index| {
+                        if index < row_count {
+                            let start = index * columns;
+                            let end = (start + columns).min(courses.len());
+                            let cards = (start..end)
+                                .map(|card_index| {
+                                    this.plaza_card(&courses[card_index], card_index, cx)
+                                })
+                                .collect::<Vec<_>>();
+                            div()
+                                .h(px(144.0))
+                                .w_full()
+                                .flex()
+                                .justify_center()
+                                .gap_4()
+                                .px_6()
+                                .pt_3()
+                                .children(cards)
+                                .into_any_element()
+                        } else {
+                            match footer {
+                                Some(PlazaFooter::Loading) => div()
+                                    .h(px(44.0))
+                                    .w_full()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .gap_2()
+                                    .child(Spinner::new().small())
+                                    .child(subtitle("加载更多…"))
+                                    .into_any_element(),
+                                Some(PlazaFooter::LoadMore) => div()
+                                    .h(px(52.0))
+                                    .w_full()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(
+                                        Button::new("plaza-load-more")
+                                            .label("加载更多")
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.load_more_plaza(cx);
+                                            })),
+                                    )
+                                    .into_any_element(),
+                                Some(PlazaFooter::Done) => div()
+                                    .h(px(40.0))
+                                    .w_full()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(subtitle(format!("已加载全部 {total} 门课程")))
+                                    .into_any_element(),
+                                None => div().into_any_element(),
+                            }
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            },
+        )
+        .track_scroll(&self.plaza_grid_scroll);
+
+        let target = SmoothTarget::virtual_list(&self.plaza_grid_scroll);
+        let view = cx.entity();
+        let viewport = SmoothWheel::new(
+            div().flex_1().min_w_0().h_full().flex().child(list),
+            Rc::new(move |event, _window, cx| {
+                let delta = event.delta.pixel_delta(px(18.)).y;
+                let (current, min) = target.offset_bounds();
+                let remaining = current - min;
+                let target = target.clone();
+                view.update(cx, |this, cx| {
+                    this.smooth_wheel("plaza-grid", target, event, cx);
+                    if delta < px(0.0)
+                        && remaining < px(480.0)
+                        && this.plaza_has_more
+                        && !this.plaza_loading_more
+                    {
+                        this.load_more_plaza(cx);
+                    }
+                });
+            }),
+        )
+        .into_any_element();
 
         div()
+            .relative()
             .size_full()
             .flex()
             .flex_col()
@@ -133,84 +188,7 @@ impl AppState {
                     .flex_1()
                     .min_h_0()
                     .overflow_hidden()
-                    .child(
-                        div()
-                            .id("plaza-grid-scroll")
-                            .flex_1()
-                            .min_h_0()
-                            .overflow_y_scroll()
-                            .track_scroll(&self.plaza_grid_scroll)
-                            .on_scroll_wheel(cx.listener(
-                                |this, _event: &ScrollWheelEvent, window, cx| {
-                                    if !this.plaza_has_more {
-                                        return;
-                                    }
-                                    let offset = this.plaza_grid_scroll.offset().y;
-                                    let max = this.plaza_grid_scroll.max_offset().y;
-                                    // offset is negative while scrolling down;
-                                    // the remaining distance is max + offset.
-                                    if f32::from(max + offset) < 240.0 {
-                                        this.load_more_plaza(window, cx);
-                                    }
-                                },
-                            ))
-                            .child(
-                                div()
-                                    .p_6()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_4()
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_wrap()
-                                            .justify_center()
-                                            .gap_4()
-                                            .children(cards),
-                                    )
-                                    .when(self.plaza_loading_more, |this| {
-                                        this.child(
-                                            div()
-                                                .h(px(44.0))
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .gap_2()
-                                                .child(Spinner::new().small())
-                                                .child(subtitle("加载更多…")),
-                                        )
-                                    })
-                                    .when(
-                                        !self.plaza_loading_more && self.plaza_has_more,
-                                        |this| {
-                                            this.child(
-                                                div().flex().justify_center().child(
-                                                    Button::new("plaza-load-more")
-                                                        .label("加载更多")
-                                                        .on_click(cx.listener(
-                                                            |this, _, window, cx| {
-                                                                this.load_more_plaza(window, cx);
-                                                            },
-                                                        )),
-                                                ),
-                                            )
-                                        },
-                                    )
-                                    .when(
-                                        !self.plaza_has_more && !courses.is_empty(),
-                                        |this| {
-                                            this.child(
-                                                div().flex().justify_center().child(subtitle(
-                                                    format!(
-                                                        "已加载全部 {} 门课程",
-                                                        self.plaza_total
-                                                    ),
-                                                )),
-                                            )
-                                        },
-                                    ),
-                            ),
-                    )
+                    .child(viewport)
                     .child(crate::ui_scroll::vertical_rail(
                         "plaza-grid-scrollbar",
                         &self.plaza_grid_scroll,
@@ -226,6 +204,90 @@ impl AppState {
                         .child(subtitle("广场暂时没有分享。可在“课程”里点击“发布到广场”。")),
                 )
             })
+            .when(self.plaza_scrolled, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .right(px(24.0))
+                        .bottom(px(24.0))
+                        .child(
+                            Button::new("plaza-back-to-top")
+                                .icon(IconName::ArrowUp)
+                                .primary()
+                                .accessibility_label("回到顶部")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.scroll_plaza_top(cx);
+                                })),
+                        ),
+                )
+            })
+    }
+
+    fn plaza_card(&self, course: &crate::share::CourseGroup, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let starred = self.is_course_starred(&course.key, &course.course_name);
+        let star_label = if starred { "★" } else { "☆" };
+        let key_for_star = course.key.clone();
+        let name_for_star = course.course_name.clone();
+        let key_for_open = course.key.clone();
+        let mut meta = Vec::new();
+        if !course.term.is_empty() {
+            meta.push(course.term.clone());
+        }
+        if !course.teacher.is_empty() {
+            meta.push(course.teacher.clone());
+        }
+        let mut card = div()
+            .id(ElementId::Name(format!("plaza-card-{index}").into()))
+            .w(px(300.0))
+            .h(px(128.0))
+            .p_4()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .bg(tone(PANEL))
+            .border_1()
+            .border_color(tone(BORDER))
+            .rounded_sm()
+            .cursor_pointer()
+            .hover(|style| style.border_color(tone(PRIMARY)))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.select_plaza_course(key_for_open.clone(), window, cx);
+            }))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .truncate()
+                            .child(course.course_name.clone()),
+                    )
+                    .child(
+                        Button::new(ElementId::Name(
+                            format!("plaza-star-{index}").into(),
+                        ))
+                        .label(star_label)
+                        .ghost()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.toggle_star_course(
+                                key_for_star.clone(),
+                                name_for_star.clone(),
+                                cx,
+                            );
+                        })),
+                    ),
+            );
+        if !meta.is_empty() {
+            card = card.child(subtitle(meta.join(" · ")));
+        }
+        card.child(subtitle(format!("{} 条回放", course.count)))
+            .into_any_element()
     }
 
     fn plaza_detail(
@@ -248,6 +310,12 @@ impl AppState {
         .flex_1()
         .min_h_0()
         .track_scroll(&self.plaza_detail_scroll);
+        let viewport = self.smooth_viewport(
+            "plaza-detail",
+            SmoothTarget::uniform(&self.plaza_detail_scroll),
+            list,
+            cx,
+        );
 
         let starred = self.is_course_starred(&course.key, &course.course_name);
         let star_label = if starred { "★" } else { "☆" };
@@ -298,7 +366,7 @@ impl AppState {
                     .flex_1()
                     .min_h_0()
                     .overflow_hidden()
-                    .child(list)
+                    .child(viewport)
                     .child(crate::ui_scroll::uniform_rail(
                         "plaza-detail-scrollbar",
                         &self.plaza_detail_scroll,
@@ -416,4 +484,17 @@ impl AppState {
             )
             .into_any_element()
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PlazaFooter {
+    Loading,
+    LoadMore,
+    Done,
+}
+
+fn plaza_columns(window: &Window) -> usize {
+    let width = f32::from(window.viewport_size().width);
+    let available = (width - 300.0 - 48.0 - 16.0).max(0.0);
+    ((available + 16.0) / 316.0).floor().max(1.0) as usize
 }

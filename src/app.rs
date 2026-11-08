@@ -5,9 +5,10 @@ use crate::download::{DownloadControl, DownloadEvent};
 use crate::http::Http;
 use crate::media::{self, MediaCandidate};
 use crate::share::{CourseGroup, Share, ShareClient};
+use crate::smooth_scroll::SmoothTarget;
 use gpui_component::input::{InputEvent, InputState};
 use gpui_kit::prelude::*;
-use gpui_kit::{Context, Entity, ScrollHandle, UniformListScrollHandle, Window};
+use gpui_kit::{px, Context, Entity, Pixels, ScrollHandle, Task, UniformListScrollHandle, Window};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
@@ -94,7 +95,7 @@ pub struct AppState {
     pub(crate) course_scroll: UniformListScrollHandle,
     pub(crate) replay_scroll: UniformListScrollHandle,
     pub(crate) favorite_scroll: UniformListScrollHandle,
-    pub(crate) plaza_grid_scroll: ScrollHandle,
+    pub(crate) plaza_grid_scroll: gpui_kit::base::VirtualListScrollHandle,
     pub(crate) plaza_detail_scroll: UniformListScrollHandle,
     pub(crate) collapsed_terms: HashSet<String>,
     pub(crate) collapsed_sections: HashSet<String>,
@@ -119,6 +120,7 @@ pub struct AppState {
     pub(crate) plaza_loading_more: bool,
     pub(crate) plaza_has_more: bool,
     pub(crate) plaza_total: usize,
+    pub(crate) plaza_scrolled: bool,
     pub(crate) download_tasks: Vec<DownloadTask>,
     pub(crate) download_scroll: ScrollHandle,
     pub(crate) download_attempt: u64,
@@ -126,6 +128,10 @@ pub struct AppState {
     pub(crate) downloaded: usize,
     pub(crate) skipped: usize,
     pub(crate) failed: usize,
+    pub(crate) smooth_target: Option<(&'static str, SmoothTarget)>,
+    pub(crate) smooth_pending: Pixels,
+    pub(crate) smooth_animating: bool,
+    pub(crate) smooth_scroll_task: Option<Task<()>>,
 }
 
 impl AppState {
@@ -191,7 +197,7 @@ impl AppState {
             course_scroll: UniformListScrollHandle::new(),
             replay_scroll: UniformListScrollHandle::new(),
             favorite_scroll: UniformListScrollHandle::new(),
-            plaza_grid_scroll: ScrollHandle::new(),
+            plaza_grid_scroll: gpui_kit::base::VirtualListScrollHandle::new(),
             plaza_detail_scroll: UniformListScrollHandle::new(),
             collapsed_terms: HashSet::new(),
             collapsed_sections: HashSet::from(["favorites".to_string()]),
@@ -216,6 +222,7 @@ impl AppState {
             plaza_loading_more: false,
             plaza_has_more: false,
             plaza_total: 0,
+            plaza_scrolled: false,
             download_tasks: Vec::new(),
             download_scroll: ScrollHandle::new(),
             download_attempt: 0,
@@ -223,6 +230,10 @@ impl AppState {
             downloaded: 0,
             skipped: 0,
             failed: 0,
+            smooth_target: None,
+            smooth_pending: px(0.0),
+            smooth_animating: false,
+            smooth_scroll_task: None,
         };
         cx.subscribe_in(
             &app.plaza_search,
@@ -251,6 +262,13 @@ impl AppState {
             }
         })
         .detach();
+        cx.spawn_in(window, async move |this, cx| loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(250))
+                .await;
+            let _ = this.update(cx, |this, cx| this.poll_plaza_scroll(cx));
+        })
+        .detach();
         app
     }
 
@@ -273,6 +291,36 @@ impl AppState {
                 Ok(value) => {
                     let _ = this.update_in(cx, |this, window, cx| {
                         apply(this, value, window, cx);
+                        cx.notify();
+                    });
+                    break;
+                }
+                Err(TryRecvError::Empty) => {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(80))
+                        .await;
+                }
+                Err(TryRecvError::Disconnected) => break,
+            }
+        })
+        .detach();
+    }
+
+    fn run_background<T, F, A>(&mut self, cx: &mut Context<Self>, work: F, apply: A)
+    where
+        T: Send + 'static,
+        F: FnOnce() -> T + Send + 'static,
+        A: FnOnce(&mut Self, T, &mut Context<Self>) + 'static,
+    {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(work());
+        });
+        cx.spawn(async move |this, cx| loop {
+            match rx.try_recv() {
+                Ok(value) => {
+                    let _ = this.update(cx, |this, cx| {
+                        apply(this, value, cx);
                         cx.notify();
                     });
                     break;
@@ -593,11 +641,14 @@ impl AppState {
         self.plaza_total = 0;
         self.selected_course = None;
         self.plaza_selected_course = None;
+        self.plaza_scrolled = false;
         self.favorite_selected = None;
         self.collapsed_terms.clear();
         self.collapsed_sections = HashSet::from(["favorites".to_string()]);
         self.nav_history.clear();
         self.nav_index = 0;
+        self.smooth_target = None;
+        self.smooth_pending = px(0.0);
         self.pending_login = None;
         self.pending_haoxue_course = None;
         self.captcha_path = None;
@@ -1416,8 +1467,9 @@ impl AppState {
 
     pub(crate) fn refresh_plaza(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.plaza_selected_course = None;
-        self.plaza_grid_scroll = ScrollHandle::new();
+        self.plaza_grid_scroll = gpui_kit::base::VirtualListScrollHandle::new();
         self.plaza_detail_scroll = UniformListScrollHandle::new();
+        self.plaza_scrolled = false;
         self.plaza_loading_more = false;
         let query = self.plaza_search.read(cx).value().trim().to_string();
         let backend = self.config.backend_url.clone();
@@ -1450,7 +1502,7 @@ impl AppState {
         );
     }
 
-    pub(crate) fn load_more_plaza(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn load_more_plaza(&mut self, cx: &mut Context<Self>) {
         if self.plaza_loading_more || !self.plaza_has_more || self.busy {
             return;
         }
@@ -1460,14 +1512,13 @@ impl AppState {
         let query_for_work = query.clone();
         self.plaza_loading_more = true;
         cx.notify();
-        self.run_blocking(
-            window,
+        self.run_background(
             cx,
             move || {
                 ShareClient::new(&backend)?
                     .list_courses_page(&query_for_work, PLAZA_PAGE_SIZE, offset)
             },
-            move |this, result, _window, cx| {
+            move |this, result, cx| {
                 this.plaza_loading_more = false;
                 let current_query = this.plaza_search.read(cx).value().trim().to_string();
                 if current_query != query {
@@ -1499,6 +1550,31 @@ impl AppState {
                 cx.notify();
             },
         );
+    }
+
+    fn poll_plaza_scroll(&mut self, cx: &mut Context<Self>) {
+        let target = SmoothTarget::virtual_list(&self.plaza_grid_scroll);
+        let (current, min) = target.offset_bounds();
+        let scrolled = current < px(-4.0);
+        if scrolled != self.plaza_scrolled {
+            self.plaza_scrolled = scrolled;
+            cx.notify();
+        }
+        if self.tab == Tab::Plaza
+            && self.plaza_selected_course.is_none()
+            && self.plaza_has_more
+            && !self.plaza_loading_more
+            && !self.busy
+            && min < px(0.0)
+            && current - min < px(240.0)
+        {
+            self.load_more_plaza(cx);
+        }
+    }
+
+    pub(crate) fn scroll_plaza_top(&mut self, cx: &mut Context<Self>) {
+        let target = SmoothTarget::virtual_list(&self.plaza_grid_scroll);
+        self.scroll_target_to_top("plaza-grid", target, cx);
     }
 
     pub(crate) fn toggle_sidebar_section(

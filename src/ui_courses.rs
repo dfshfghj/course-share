@@ -1,4 +1,5 @@
 use crate::app::{AppState, SidebarSection, Tab};
+use crate::smooth_scroll::SmoothTarget;
 use crate::theme::tone;
 use crate::ui::{subtitle, title, BORDER, DANGER, MUTED, PANEL, PRIMARY, PRIMARY_SOFT, SUCCESS};
 use gpui_component::button::{Button, ButtonVariants as _};
@@ -168,6 +169,12 @@ impl AppState {
         .flex_1()
         .min_h_0()
         .track_scroll(&self.course_scroll);
+        let viewport = self.smooth_viewport(
+            "sidebar-courses",
+            SmoothTarget::uniform(&self.course_scroll),
+            list,
+            cx,
+        );
 
         div()
             .w(px(300.0))
@@ -185,7 +192,7 @@ impl AppState {
                     .flex_1()
                     .min_h_0()
                     .overflow_hidden()
-                    .child(list)
+                    .child(viewport)
                     .child(crate::ui_scroll::uniform_rail(
                         "course-scrollbar",
                         &self.course_scroll,
@@ -478,6 +485,12 @@ impl AppState {
         .flex_1()
         .min_h_0()
         .track_scroll(&self.favorite_scroll);
+        let viewport = self.smooth_viewport(
+            "favorite-replays",
+            SmoothTarget::uniform(&self.favorite_scroll),
+            list,
+            cx,
+        );
 
         let mut meta = Vec::new();
         if !term.is_empty() {
@@ -551,7 +564,7 @@ impl AppState {
                     .min_h_0()
                     .overflow_hidden()
                     .pt_4()
-                    .child(list)
+                    .child(viewport)
                     .child(crate::ui_scroll::uniform_rail(
                         "favorite-replay-scrollbar",
                         &self.favorite_scroll,
@@ -607,6 +620,12 @@ impl AppState {
         .flex_1()
         .min_h_0()
         .track_scroll(&self.replay_scroll);
+        let viewport = self.smooth_viewport(
+            "replays",
+            SmoothTarget::uniform(&self.replay_scroll),
+            list,
+            cx,
+        );
 
         let mut title_block = div()
             .flex()
@@ -673,7 +692,7 @@ impl AppState {
                     .min_h_0()
                     .overflow_hidden()
                     .pt_4()
-                    .child(list)
+                    .child(viewport)
                     .child(crate::ui_scroll::uniform_rail(
                         "replay-scrollbar",
                         &self.replay_scroll,

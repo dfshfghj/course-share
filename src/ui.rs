@@ -1,4 +1,5 @@
 use crate::app::{AppState, DownloadTask, DownloadTaskState, LoginMode};
+use crate::smooth_scroll::{SmoothTarget, SmoothWheel};
 use crate::theme::tone;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputState};
@@ -6,6 +7,7 @@ use gpui_component::Disableable as _;
 use gpui_component::{IconName, Sizable as _};
 use gpui_kit::Focusable as _;
 use gpui_kit::prelude::*;
+use std::rc::Rc;
 use gpui_kit::{div, px, AnyElement, Context, ElementId, Entity, FontWeight, IntoElement, MouseButton, Render, Window};
 
 pub(crate) const BG: u32 = 0xf3f5f9;
@@ -260,10 +262,29 @@ impl AppState {
             )
         };
         let list_height = (self.download_tasks.len() as f32 * 34.0).clamp(34.0, 170.0);
-        let rows = self
+        let rows: Vec<AnyElement> = self
             .download_tasks
             .iter()
-            .map(|task| self.download_task_row(task, cx));
+            .map(|task| self.download_task_row(task, cx))
+            .collect();
+        let scroll = div()
+            .id("download-task-scroll")
+            .size_full()
+            .overflow_y_scroll()
+            .track_scroll(&self.download_scroll)
+            .child(div().flex().flex_col().children(rows));
+        let view = cx.entity();
+        let target = SmoothTarget::Handle(self.download_scroll.clone());
+        let viewport = SmoothWheel::new(
+            div().flex_1().min_w_0().h(px(list_height)).child(scroll),
+            Rc::new(move |event, _, cx| {
+                let target = target.clone();
+                view.update(cx, |this, cx| {
+                    this.smooth_wheel("download-tasks", target, event, cx);
+                });
+            }),
+        )
+        .into_any_element();
         div()
             .min_h(px(56.0))
             .px_5()
@@ -303,16 +324,7 @@ impl AppState {
                     div()
                         .flex()
                         .w_full()
-                        .child(
-                            div()
-                                .id("download-task-scroll")
-                                .flex_1()
-                                .min_w_0()
-                                .h(px(list_height))
-                                .overflow_y_scroll()
-                                .track_scroll(&self.download_scroll)
-                                .child(div().flex().flex_col().children(rows)),
-                        )
+                        .child(viewport)
                         .child(crate::ui_scroll::vertical_rail(
                             "download-task-scrollbar",
                             &self.download_scroll,

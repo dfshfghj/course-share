@@ -14,6 +14,7 @@ mod media;
 mod onlineroomse;
 mod preview;
 mod share;
+mod smooth_scroll;
 mod theme;
 mod ui;
 mod ui_courses;
