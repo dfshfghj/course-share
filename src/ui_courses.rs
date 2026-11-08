@@ -357,7 +357,9 @@ impl AppState {
         let count = replays.len();
         let pending_count = replays
             .iter()
-            .filter(|replay| !self.replay_downloaded(replay))
+            .filter(|replay| {
+                !self.replay_downloaded(replay) && !self.replay_in_progress(replay)
+            })
             .count();
         let name = self
             .favorite_shares
@@ -454,7 +456,7 @@ impl AppState {
                                 Button::new("download-favorite-all")
                                     .label("下载全部")
                                     .primary()
-                                    .disabled(self.busy || pending_count == 0)
+                                    .disabled(pending_count == 0)
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         this.download_favorite_all(&name_for_download, window, cx);
                                     })),
@@ -505,7 +507,9 @@ impl AppState {
         let term = course.term.clone();
         let pending_count = replays
             .iter()
-            .filter(|replay| !self.replay_downloaded(replay))
+            .filter(|replay| {
+                !self.replay_downloaded(replay) && !self.replay_in_progress(replay)
+            })
             .count();
         let row_count = replays.len();
         let replays_for_list = replays.clone();
@@ -566,7 +570,7 @@ impl AppState {
                                 Button::new("download-all")
                                     .label("下载全部")
                                     .primary()
-                                    .disabled(self.busy || pending_count == 0)
+                                    .disabled(pending_count == 0)
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.download_all(window, cx);
                                     })),
@@ -646,7 +650,7 @@ impl AppState {
         let button = match class {
             2 => button.success().disabled(true),
             1 => button.warning().disabled(true),
-            _ => button.primary().disabled(self.busy),
+            _ => button.primary(),
         };
         let replay_for_download = replay.clone();
         let replay_for_preview = replay.clone();

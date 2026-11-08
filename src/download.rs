@@ -7,38 +7,158 @@ use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use url::Url;
 
+pub const SEGMENT_CONCURRENCY: usize = 8;
+
+/// Shared pause/stop handle for a single download attempt.
+#[derive(Default)]
+pub struct DownloadControl {
+    paused: AtomicBool,
+    stopped: AtomicBool,
+    ffmpeg_pid: AtomicU32,
+}
+
+impl DownloadControl {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    pub fn pause(&self) {
+        if !self.stopped.load(Ordering::Relaxed) {
+            self.paused.store(true, Ordering::Relaxed);
+        }
+    }
+
+    pub fn stop(&self) {
+        self.stopped.store(true, Ordering::Relaxed);
+        self.paused.store(false, Ordering::Relaxed);
+        let pid = self.ffmpeg_pid.load(Ordering::Relaxed);
+        if pid > 0 {
+            kill_process(pid);
+        }
+    }
+
+    pub fn is_stopped(&self) -> bool {
+        self.stopped.load(Ordering::Relaxed)
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::Relaxed)
+    }
+
+    /// Either pause or stop aborts the current attempt so its worker slot can
+    /// be reused; resuming starts a fresh attempt over the segment cache.
+    pub(crate) fn aborted(&self) -> bool {
+        self.is_stopped() || self.is_paused()
+    }
+
+    fn register_ffmpeg(&self, pid: u32) {
+        self.ffmpeg_pid.store(pid, Ordering::Relaxed);
+    }
+
+    fn clear_ffmpeg(&self) {
+        self.ffmpeg_pid.store(0, Ordering::Relaxed);
+    }
+}
+
+#[cfg(unix)]
+fn kill_process(pid: u32) {
+    let _ = Command::new("kill")
+        .args(["-9", &pid.to_string()])
+        .status();
+}
+
+#[cfg(windows)]
+fn kill_process(pid: u32) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let _ = Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/F"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .status();
+}
+
+#[cfg(not(any(unix, windows)))]
+fn kill_process(_pid: u32) {}
+
 #[derive(Clone, Debug)]
 pub enum DownloadEvent {
-    Status(String),
     Progress {
+        attempt: u64,
+        id: String,
         title: String,
         downloaded: u64,
         total: u64,
         detail: String,
+        merging: bool,
     },
     Done {
+        attempt: u64,
+        id: String,
         title: String,
         path: PathBuf,
         skipped: bool,
     },
     Failed {
+        attempt: u64,
+        id: String,
         title: String,
         error: String,
     },
-    BatchDone,
+    Stopped {
+        attempt: u64,
+        id: String,
+        title: String,
+    },
+    Paused {
+        attempt: u64,
+        id: String,
+        title: String,
+    },
 }
 
-pub fn download_replay(
+#[derive(Debug)]
+pub struct PreparedHls {
+    pub cache_dir: PathBuf,
+    pub playlist: PathBuf,
+    pub temporary: PathBuf,
+    pub output: PathBuf,
+    pub duration: f64,
+}
+
+#[derive(Debug)]
+pub enum Prepared {
+    Skipped { path: PathBuf },
+    Complete { path: PathBuf },
+    Hls(PreparedHls),
+    Stopped,
+}
+
+#[derive(Debug)]
+pub enum MergeOutcome {
+    Completed(PathBuf),
+    Stopped,
+}
+
+/// Downloads everything needed for a replay but leaves HLS merging to the
+/// caller, so the network slot can be reused while ffmpeg runs.
+pub fn download_network(
     http: &Http,
     replay: &Replay,
     output_root: &Path,
-    ffmpeg: &str,
+    attempt: u64,
+    id: &str,
+    control: &DownloadControl,
     tx: &Sender<DownloadEvent>,
-) -> Result<()> {
+) -> Result<Prepared> {
+    if control.aborted() {
+        return Ok(Prepared::Stopped);
+    }
     let candidate = replay
         .media
         .first()
@@ -73,41 +193,91 @@ pub fn download_replay(
         .with_extension(extension);
     let title = replay.display_title();
 
-    tx.send(DownloadEvent::Status(format!("准备下载：{title}"))).ok();
+    send_progress(tx, attempt, id, &title, 0, 0, "检查已有文件…", false);
 
     if let Some(existing) = media::find_downloaded(&dir, sub_title, &replay.lecturer) {
-        tx.send(DownloadEvent::Done {
-            title,
-            path: existing,
-            skipped: true,
-        })
-        .ok();
-        return Ok(());
+        return Ok(Prepared::Skipped { path: existing });
     }
 
     if candidate.is_hls() {
-        download_hls(http, &candidate.url, &output, ffmpeg, &title, tx)?;
+        match prepare_hls(http, &candidate.url, &output, attempt, id, &title, control, tx)? {
+            Some(prepared) => Ok(Prepared::Hls(prepared)),
+            None => Ok(Prepared::Stopped),
+        }
+    } else if download_file(
+        http,
+        &candidate.url,
+        &output,
+        attempt,
+        id,
+        &title,
+        control,
+        tx,
+    )? {
+        Ok(Prepared::Complete { path: output })
     } else {
-        download_file(http, &candidate.url, &output, &title, tx)?;
+        Ok(Prepared::Stopped)
     }
+}
 
-    tx.send(DownloadEvent::Done {
+pub fn merge_hls(
+    prepared: PreparedHls,
+    ffmpeg: &str,
+    attempt: u64,
+    id: &str,
+    title: &str,
+    control: &DownloadControl,
+    tx: &Sender<DownloadEvent>,
+) -> Result<MergeOutcome> {
+    if control.aborted() {
+        return Ok(MergeOutcome::Stopped);
+    }
+    let total_ms = (prepared.duration * 1000.0) as u64;
+    send_progress(tx, attempt, id, title, 0, total_ms, "开始合并…", true);
+    let status = run_ffmpeg(
+        ffmpeg,
+        &prepared.playlist,
+        &prepared.temporary,
+        prepared.duration,
+        attempt,
+        id,
         title,
-        path: output.clone(),
-        skipped: false,
-    })
-    .ok();
-    Ok(())
+        control,
+        tx,
+    )
+    .context("调用 ffmpeg 合并 HLS")?;
+    if control.is_stopped() {
+        let _ = fs::remove_file(&prepared.temporary);
+        return Ok(MergeOutcome::Stopped);
+    }
+    if !status.success() {
+        let _ = fs::remove_file(&prepared.temporary);
+        return Err(anyhow!(
+            "ffmpeg 合并失败（退出码 {:?}）；分片缓存保留在 {}",
+            status.code(),
+            prepared.cache_dir.display()
+        ));
+    }
+    media::replace_file(&prepared.temporary, &prepared.output)
+        .with_context(|| format!("rename to {}", prepared.output.display()))?;
+    let _ = fs::remove_dir_all(&prepared.cache_dir);
+    Ok(MergeOutcome::Completed(prepared.output))
 }
 
 fn download_file(
     http: &Http,
     url: &str,
     output: &Path,
+    attempt: u64,
+    id: &str,
     title: &str,
+    control: &DownloadControl,
     tx: &Sender<DownloadEvent>,
-) -> Result<()> {
-    let temporary = output.with_extension("part.mp4");
+) -> Result<bool> {
+    if control.aborted() {
+        return Ok(false);
+    }
+    let temporary = output.with_extension(format!("part-{attempt}.mp4"));
     let mut offset = temporary.metadata().map(|m| m.len()).unwrap_or(0);
     let mut range = Vec::new();
     if offset > 0 {
@@ -128,7 +298,7 @@ fn download_file(
             .and_then(|value| value.trim().parse::<u64>().ok());
         if total.map(|total| offset >= total).unwrap_or(false) {
             media::replace_file(&temporary, output)?;
-            return Ok(());
+            return Ok(true);
         }
     }
     if !(200..300).contains(&status) {
@@ -153,6 +323,10 @@ fn download_file(
     let mut last_emit = Instant::now() - Duration::from_secs(1);
     let mut buffer = [0u8; 256 * 1024];
     loop {
+        if control.aborted() {
+            file.flush()?;
+            return Ok(false);
+        }
         let read = response.read(&mut buffer).context("read media stream")?;
         if read == 0 {
             break;
@@ -160,12 +334,17 @@ fn download_file(
         file.write_all(&buffer[..read])?;
         downloaded += read as u64;
         if last_emit.elapsed() >= Duration::from_millis(250) {
-            emit_progress(tx, title, downloaded, total, started, "下载", true);
+            let speed = (downloaded as f64 / started.elapsed().as_secs_f64().max(0.001)) as u64;
+            let detail = format!("下载 · {}/s", format_bytes(speed));
+            send_progress(tx, attempt, id, title, downloaded, total, &detail, false);
             last_emit = Instant::now();
         }
     }
     file.flush()?;
     drop(file);
+    if control.aborted() {
+        return Ok(false);
+    }
     if total > 0 && downloaded != total {
         return Err(anyhow!(
             "下载不完整：期望 {}，实际 {}",
@@ -174,19 +353,32 @@ fn download_file(
         ));
     }
     media::replace_file(&temporary, output).with_context(|| format!("rename to {}", output.display()))?;
-    emit_progress(tx, title, downloaded, total.max(downloaded), started, "完成", true);
-    Ok(())
+    send_progress(tx, attempt, id, title, downloaded, total.max(downloaded), "下载完成", false);
+    Ok(true)
 }
 
-fn download_hls(
+struct HlsSegment {
+    remote: Url,
+    duration: f64,
+    name: String,
+    path: PathBuf,
+    ready: bool,
+}
+
+fn prepare_hls(
     http: &Http,
     url: &str,
     output: &Path,
-    ffmpeg: &str,
+    attempt: u64,
+    id: &str,
     title: &str,
+    control: &DownloadControl,
     tx: &Sender<DownloadEvent>,
-) -> Result<()> {
-    tx.send(DownloadEvent::Status(format!("解析 HLS：{title}"))).ok();
+) -> Result<Option<PreparedHls>> {
+    if control.aborted() {
+        return Ok(None);
+    }
+    send_progress(tx, attempt, id, title, 0, 0, "解析 HLS…", false);
     let (playlist_url, playlist) = fetch_media_playlist(http, url, 0)?;
     let duration = playlist_duration(&playlist);
     let cache_dir = output.with_file_name(format!(
@@ -213,7 +405,7 @@ fn download_hls(
         .map(|line| line.trim().to_string())
         .filter(|line| !line.is_empty())
         .collect();
-    let mut segments: Vec<(Url, f64)> = Vec::new();
+    let mut segments: Vec<HlsSegment> = Vec::new();
     let mut pending_duration = 0.0f64;
     for line in &lines {
         if let Some(value) = line.strip_prefix("#EXTINF:") {
@@ -230,7 +422,21 @@ fn download_hls(
         let remote = playlist_url
             .join(line)
             .with_context(|| format!("bad segment URL {line}"))?;
-        segments.push((remote, pending_duration));
+        let suffix = Path::new(remote.path())
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| format!(".{ext}"))
+            .unwrap_or_else(|| ".ts".to_string());
+        let name = format!("segment_{:06}{suffix}", segments.len() + 1);
+        let path = cache_dir.join(&name);
+        let ready = path.metadata().map(|meta| meta.len() > 0).unwrap_or(false);
+        segments.push(HlsSegment {
+            remote,
+            duration: pending_duration,
+            name,
+            path,
+            ready,
+        });
         pending_duration = 0.0;
     }
     if segments.is_empty() {
@@ -238,34 +444,124 @@ fn download_hls(
     }
 
     let total = segments.len();
+    let initial_ready = segments.iter().filter(|segment| segment.ready).count();
+    let completed = AtomicUsize::new(initial_ready);
+    let bytes_done = AtomicU64::new(0);
+    let next = AtomicUsize::new(0);
+    let failure: Mutex<Option<(usize, String)>> = Mutex::new(None);
     let started = Instant::now();
-    let mut local_names = Vec::with_capacity(total);
-    let mut ready_duration = 0.0f64;
-    for (index, (remote, segment_duration)) in segments.iter().enumerate() {
-        let suffix = Path::new(remote.path())
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .map(|ext| format!(".{ext}"))
-            .unwrap_or_else(|| ".ts".to_string());
-        let name = format!("segment_{:06}{suffix}", index + 1);
-        let local_path = cache_dir.join(&name);
-        if !local_path.is_file() || local_path.metadata().map(|m| m.len() == 0).unwrap_or(true) {
-            let bytes = http
-                .get_bytes(remote.as_str())
-                .with_context(|| format!("下载分片 {}/{}", index + 1, total))?;
-            write_atomic(&local_path, &bytes)?;
+    let workers = (total - initial_ready).min(SEGMENT_CONCURRENCY);
+    let detail = format!("分片 {initial_ready}/{total} · 并发 {workers}");
+    send_progress(
+        tx,
+        attempt,
+        id,
+        title,
+        initial_ready as u64,
+        total as u64,
+        &detail,
+        false,
+    );
+
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            let http = http.clone();
+            let tx = tx.clone();
+            let segments = &segments;
+            let next = &next;
+            let completed = &completed;
+            let bytes_done = &bytes_done;
+            let failure = &failure;
+            let started = started;
+            let control = control;
+            scope.spawn(move || {
+                let mut last_emit = Instant::now() - Duration::from_secs(1);
+                loop {
+                    if control.aborted() {
+                        break;
+                    }
+                    if failure.lock().map(|state| state.is_some()).unwrap_or(true) {
+                        break;
+                    }
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(segment) = segments.get(index) else {
+                        break;
+                    };
+                    if segment.ready {
+                        continue;
+                    }
+                    match http.get_bytes(segment.remote.as_str()) {
+                        Ok(bytes) => {
+                            if let Err(error) = write_atomic(&segment.path, &bytes) {
+                                record_failure(failure, index, format!("{error:#}"));
+                                break;
+                            }
+                            bytes_done.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+                            let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                            if last_emit.elapsed() >= Duration::from_millis(150) {
+                                let elapsed = started.elapsed().as_secs_f64().max(0.001);
+                                let speed =
+                                    (bytes_done.load(Ordering::Relaxed) as f64 / elapsed) as u64;
+                                let detail = format!(
+                                    "分片 {done}/{total} · 并发 {workers} · {}/s",
+                                    format_bytes(speed)
+                                );
+                                send_progress(
+                                    &tx,
+                                    attempt,
+                                    id,
+                                    title,
+                                    done as u64,
+                                    total as u64,
+                                    &detail,
+                                    false,
+                                );
+                                last_emit = Instant::now();
+                            }
+                        }
+                        Err(error) => {
+                            record_failure(failure, index, format!("{error:#}"));
+                            break;
+                        }
+                    }
+                }
+            });
         }
-        local_names.push(name);
-        ready_duration += segment_duration;
-        let detail = format!(
-            "分片 {}/{}，已就绪 {}",
-            index + 1,
-            total,
-            format_time(ready_duration)
-        );
-        emit_progress(tx, title, (index + 1) as u64, total as u64, started, &detail, false);
+    });
+
+    let failure = failure
+        .into_inner()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if control.aborted() {
+        return Ok(None);
+    }
+    if let Some((index, error)) = failure {
+        return Err(anyhow!("下载分片 {}/{}：{error}", index + 1, total));
+    }
+    if let Some(index) = segments.iter().position(|segment| {
+        segment
+            .path
+            .metadata()
+            .map(|meta| meta.len() == 0)
+            .unwrap_or(true)
+    }) {
+        return Err(anyhow!("分片 {} 未下载完成", index + 1));
     }
 
+    let names: Vec<String> = segments
+        .iter()
+        .map(|segment| segment.name.clone())
+        .collect();
+    let ready_duration: f64 = segments.iter().map(|segment| segment.duration).sum();
+    let detail = format!(
+        "分片 {total}/{total} · 已就绪 {}",
+        format_time(ready_duration)
+    );
+    send_progress(tx, attempt, id, title, total as u64, total as u64, &detail, false);
+
+    if control.aborted() {
+        return Ok(None);
+    }
     let mut local_lines = Vec::new();
     let mut auxiliary: HashMap<String, String> = HashMap::new();
     let mut segment_index = 0usize;
@@ -282,8 +578,8 @@ fn download_hls(
             )?);
         } else if line.starts_with('#') {
             local_lines.push(line.clone());
-        } else if segment_index < local_names.len() {
-            local_lines.push(local_names[segment_index].clone());
+        } else if segment_index < names.len() {
+            local_lines.push(names[segment_index].clone());
             segment_index += 1;
         }
     }
@@ -291,53 +587,51 @@ fn download_hls(
     let local_playlist = cache_dir.join("local.m3u8");
     fs::write(&local_playlist, local_lines.join("\n") + "\n")?;
 
-    let temporary = output.with_extension("part.mp4");
-    let status = run_ffmpeg(ffmpeg, &local_playlist, &temporary, duration, title, tx)
-        .context("调用 ffmpeg 合并 HLS")?;
-    if !status.success() {
-        let _ = fs::remove_file(&temporary);
-        return Err(anyhow!(
-            "ffmpeg 合并失败（退出码 {:?}）；分片缓存保留在 {}",
-            status.code(),
-            cache_dir.display()
-        ));
-    }
-    media::replace_file(&temporary, output).with_context(|| format!("rename to {}", output.display()))?;
-    let _ = fs::remove_dir_all(&cache_dir);
-    Ok(())
+    Ok(Some(PreparedHls {
+        cache_dir,
+        playlist: local_playlist,
+        temporary: output.with_extension(format!("part-{attempt}.mp4")),
+        output: output.to_path_buf(),
+        duration,
+    }))
 }
 
-fn emit_progress(
+fn record_failure(failure: &Mutex<Option<(usize, String)>>, index: usize, error: String) {
+    if let Ok(mut state) = failure.lock() {
+        if state.is_none() {
+            *state = Some((index, error));
+        }
+    }
+}
+
+fn send_progress(
     tx: &Sender<DownloadEvent>,
+    attempt: u64,
+    id: &str,
     title: &str,
     downloaded: u64,
     total: u64,
-    started: Instant,
     detail: &str,
-    bytes_based: bool,
+    merging: bool,
 ) {
-    let elapsed = started.elapsed().as_secs_f64().max(0.001);
-    let speed = if bytes_based && total > 0 {
-        format!("{}/s", format_bytes((downloaded as f64 / elapsed) as u64))
-    } else {
-        String::new()
-    };
-    let detail = if speed.is_empty() {
-        detail.to_string()
-    } else {
-        format!("{detail} · {speed}")
-    };
     tx.send(DownloadEvent::Progress {
+        attempt,
+        id: id.to_string(),
         title: title.to_string(),
         downloaded,
         total,
-        detail,
+        detail: detail.to_string(),
+        merging,
     })
     .ok();
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    let temporary = path.with_extension("part");
+    static TEMP_ID: AtomicU64 = AtomicU64::new(0);
+    let temporary = path.with_extension(format!(
+        "part{}",
+        TEMP_ID.fetch_add(1, Ordering::Relaxed)
+    ));
     fs::write(&temporary, bytes)?;
     media::replace_file(&temporary, path)?;
     Ok(())
@@ -387,7 +681,10 @@ fn run_ffmpeg(
     local_playlist: &Path,
     output: &Path,
     duration: f64,
+    attempt: u64,
+    id: &str,
     title: &str,
+    control: &DownloadControl,
     tx: &Sender<DownloadEvent>,
 ) -> Result<std::process::ExitStatus> {
     let mut command = Command::new(ffmpeg);
@@ -417,10 +714,10 @@ fn run_ffmpeg(
         .with_context(|| {
             format!("启动 ffmpeg ({ffmpeg})，请确认内置 ffmpeg 存在或在设置中指定路径")
         })?;
+    control.register_ffmpeg(child.id());
 
     if let Some(stdout) = child.stdout.take() {
         let reader = BufReader::new(stdout);
-        let started = Instant::now();
         let mut last_emit = Instant::now() - Duration::from_secs(1);
         for line in reader.lines().map_while(Result::ok) {
             let Some(value) = line.strip_prefix("out_time_ms=") else {
@@ -430,27 +727,30 @@ fn run_ffmpeg(
             if last_emit.elapsed() >= Duration::from_millis(250) {
                 let detail = if duration > 0.0 {
                     format!(
-                        "ffmpeg {} / {}",
+                        "合并 {} / {}",
                         format_time(seconds),
                         format_time(duration)
                     )
                 } else {
-                    format!("ffmpeg {}", format_time(seconds))
+                    format!("合并 {}", format_time(seconds))
                 };
-                emit_progress(
+                send_progress(
                     tx,
+                    attempt,
+                    id,
                     title,
                     (seconds * 1000.0) as u64,
                     (duration * 1000.0) as u64,
-                    started,
                     &detail,
-                    false,
+                    true,
                 );
                 last_emit = Instant::now();
             }
         }
     }
-    Ok(child.wait()?)
+    let status = child.wait()?;
+    control.clear_ffmpeg();
+    Ok(status)
 }
 
 fn fetch_media_playlist(http: &Http, url: &str, depth: usize) -> Result<(Url, String)> {
@@ -542,6 +842,23 @@ fn playlist_duration(body: &str) -> f64 {
         .sum()
 }
 
+#[cfg(test)]
+mod control_tests {
+    use super::*;
+
+    #[test]
+    fn pause_and_stop_abort_the_current_attempt() {
+        let control = DownloadControl::new();
+        assert!(!control.aborted());
+        control.pause();
+        assert!(control.is_paused());
+        assert!(control.aborted());
+        control.stop();
+        assert!(control.is_stopped());
+        assert!(control.aborted());
+    }
+}
+
 #[cfg(all(test, unix))]
 mod hls_tests {
     use super::*;
@@ -608,15 +925,30 @@ mod hls_tests {
 
         let http = Http::new(root.join("cookies.json")).unwrap();
         let (tx, _rx) = std::sync::mpsc::channel();
-        download_hls(
+        let control = DownloadControl::new();
+        let prepared = prepare_hls(
             &http,
             &format!("http://{address}/master.m3u8"),
             &output,
-            fake_ffmpeg.to_str().unwrap(),
+            1,
             "test",
+            "test",
+            &control,
+            &tx,
+        )
+        .unwrap()
+        .unwrap();
+        let outcome = merge_hls(
+            prepared,
+            fake_ffmpeg.to_str().unwrap(),
+            1,
+            "test",
+            "test",
+            &control,
             &tx,
         )
         .unwrap();
+        assert!(matches!(outcome, MergeOutcome::Completed(_)));
 
         assert!(output.is_file());
         assert_eq!(fs::read_to_string(&output).unwrap(), "fake");
@@ -682,19 +1014,24 @@ mod file_tests {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         let output = root.join("video.mp4");
-        let partial = output.with_extension("part.mp4");
+        let partial = output.with_extension("part-1.mp4");
         fs::write(&partial, vec![7u8; 300]).unwrap();
 
         let http = Http::new(root.join("cookies.json")).unwrap();
         let (tx, _rx) = std::sync::mpsc::channel();
-        download_file(
+        let control = DownloadControl::new();
+        let completed = download_file(
             &http,
             &format!("http://{address}/video.mp4"),
             &output,
+            1,
             "test",
+            "test",
+            &control,
             &tx,
         )
         .unwrap();
+        assert!(completed);
 
         assert_eq!(fs::read(&output).unwrap(), vec![7u8; 1000]);
         assert!(!partial.exists());

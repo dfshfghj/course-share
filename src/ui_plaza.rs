@@ -447,7 +447,7 @@ impl AppState {
                         ))
                         .label("下载")
                         .primary()
-                        .disabled(self.busy || share.m3u8_url.is_empty())
+                        .disabled(share.m3u8_url.is_empty())
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.download_share(share_for_download.clone(), window, cx);
                         })),

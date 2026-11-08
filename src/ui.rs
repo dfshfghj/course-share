@@ -1,10 +1,11 @@
-use crate::app::{AppState, LoginMode, Tab};
+use crate::app::{AppState, DownloadTask, DownloadTaskState, LoginMode, Tab};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputState};
 use gpui_component::Disableable as _;
+use gpui_component::IconName;
 use gpui_kit::Focusable as _;
 use gpui_kit::prelude::*;
-use gpui_kit::{div, px, rgb, Context, ElementId, Entity, FontWeight, IntoElement, Render, Window};
+use gpui_kit::{div, px, rgb, AnyElement, Context, ElementId, Entity, FontWeight, IntoElement, Render, Window};
 
 pub(crate) const BG: u32 = 0xf3f5f9;
 pub(crate) const PANEL: u32 = 0xffffff;
@@ -313,18 +314,24 @@ impl AppState {
         }))
     }
 
-    fn footer(&self) -> impl IntoElement {
-        let fraction = self
-            .progress
-            .as_ref()
-            .map(|progress| {
-                if progress.total == 0 {
-                    0.0
-                } else {
-                    (progress.downloaded as f32 / progress.total as f32).clamp(0.0, 1.0)
-                }
-            })
-            .unwrap_or(0.0);
+    fn footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let active = self.active_downloads.len();
+        let summary = if active > 0 {
+            format!(
+                "下载中 {} · 新增{} / 跳过{} / 失败{}",
+                active, self.downloaded, self.skipped, self.failed
+            )
+        } else {
+            format!(
+                "新增{} / 跳过{} / 失败{}",
+                self.downloaded, self.skipped, self.failed
+            )
+        };
+        let list_height = (self.download_tasks.len() as f32 * 34.0).clamp(34.0, 170.0);
+        let rows = self
+            .download_tasks
+            .iter()
+            .map(|task| self.download_task_row(task, cx));
         div()
             .min_h(px(56.0))
             .px_5()
@@ -340,9 +347,12 @@ impl AppState {
                     .flex()
                     .items_center()
                     .justify_between()
+                    .gap_4()
                     .child(
                         div()
                             .flex_1()
+                            .min_w_0()
+                            .truncate()
                             .text_sm()
                             .text_color(if self.error.is_some() { rgb(DANGER) } else { rgb(MUTED) })
                             .child(
@@ -354,38 +364,161 @@ impl AppState {
                                     .collect::<String>(),
                             ),
                     )
-                    .when(self.downloading, |this| {
-                        this.child(subtitle(format!(
-                            "新增{} / 跳过{} / 失败{}",
-                            self.downloaded, self.skipped, self.failed
-                        )))
-                    })
-                    .flex_shrink_0(),
+                    .child(subtitle(summary).flex_none()),
             )
-            .when_some(self.progress.clone(), |this, progress| {
-                let width = 400.0 * fraction;
-                this.child(
+            .when(!self.download_tasks.is_empty(), |this| {
+                this.child(div().h(px(1.0)).w_full().bg(rgb(BORDER))).child(
                     div()
                         .flex()
-                        .items_center()
-                        .gap_3()
+                        .w_full()
                         .child(
                             div()
-                                .w(px(400.0))
-                                .h(px(6.0))
-                                .bg(rgb(BORDER))
-                                .rounded_full()
-                                .child(
-                                    div()
-                                        .w(px(width))
-                                        .h(px(6.0))
-                                        .bg(rgb(PRIMARY))
-                                        .rounded_full(),
-                                ),
+                                .id("download-task-scroll")
+                                .flex_1()
+                                .min_w_0()
+                                .h(px(list_height))
+                                .overflow_y_scroll()
+                                .track_scroll(&self.download_scroll)
+                                .child(div().flex().flex_col().children(rows)),
                         )
-                        .child(subtitle(format!("{} · {}", progress.title, progress.detail))),
+                        .child(crate::ui_scroll::vertical_rail(
+                            "download-task-scrollbar",
+                            &self.download_scroll,
+                        )),
                 )
             })
+    }
+
+    fn download_task_row(
+        &self,
+        task: &DownloadTask,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let fraction = if task.total == 0 {
+            if matches!(
+                task.state,
+                DownloadTaskState::Done | DownloadTaskState::Skipped
+            ) {
+                1.0
+            } else {
+                0.0
+            }
+        } else {
+            (task.downloaded as f32 / task.total as f32).clamp(0.0, 1.0)
+        };
+        let (label, color) = match task.state {
+            DownloadTaskState::Queued => ("排队", MUTED),
+            DownloadTaskState::Downloading => ("下载", PRIMARY),
+            DownloadTaskState::Paused => ("暂停", WARN),
+            DownloadTaskState::Merging => ("合并", WARN),
+            DownloadTaskState::Done => ("完成", SUCCESS),
+            DownloadTaskState::Skipped => ("跳过", MUTED),
+            DownloadTaskState::Failed => ("失败", DANGER),
+        };
+        let mut actions: Vec<AnyElement> = Vec::new();
+        if task.state == DownloadTaskState::Downloading {
+            let task_id = task.id.clone();
+            actions.push(
+                Button::new(ElementId::Name(
+                    format!("download-pause-{}", task.id).into(),
+                ))
+                .icon(IconName::Pause)
+                .ghost()
+                .accessibility_label("暂停")
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.pause_download(&task_id, cx);
+                }))
+                .into_any_element(),
+            );
+        }
+        if matches!(
+            task.state,
+            DownloadTaskState::Paused | DownloadTaskState::Failed
+        ) {
+            let task_id = task.id.clone();
+            actions.push(
+                Button::new(ElementId::Name(
+                    format!("download-resume-{}", task.id).into(),
+                ))
+                .icon(IconName::Play)
+                .ghost()
+                .accessibility_label("继续")
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.resume_download(&task_id, cx);
+                }))
+                .into_any_element(),
+            );
+        }
+        if matches!(
+            task.state,
+            DownloadTaskState::Queued
+                | DownloadTaskState::Downloading
+                | DownloadTaskState::Paused
+                | DownloadTaskState::Merging
+        ) {
+            let task_id = task.id.clone();
+            actions.push(
+                Button::new(ElementId::Name(
+                    format!("download-stop-{}", task.id).into(),
+                ))
+                .icon(IconName::Square)
+                .ghost()
+                .accessibility_label("停止")
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.stop_download(&task_id, cx);
+                }))
+                .into_any_element(),
+            );
+        }
+        div()
+            .h(px(34.0))
+            .w_full()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap_3()
+            .child(
+                div()
+                    .w(px(280.0))
+                    .flex_none()
+                    .truncate()
+                    .text_sm()
+                    .child(task.title.clone()),
+            )
+            .child(
+                div()
+                    .w(px(40.0))
+                    .flex_none()
+                    .text_sm()
+                    .text_color(rgb(color))
+                    .child(label),
+            )
+            .child(
+                div()
+                    .w(px(130.0))
+                    .flex_none()
+                    .h(px(6.0))
+                    .bg(rgb(BORDER))
+                    .rounded_full()
+                    .child(
+                        div()
+                            .w(px(130.0 * fraction))
+                            .h(px(6.0))
+                            .bg(rgb(color))
+                            .rounded_full(),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_sm()
+                    .text_color(rgb(MUTED))
+                    .child(task.detail.clone()),
+            )
+            .child(div().flex().items_center().gap_1().children(actions))
+            .into_any_element()
     }
 }
 
@@ -409,8 +542,8 @@ impl Render for AppState {
             .text_color(rgb(TEXT))
             .child(self.header(cx))
             .child(div().flex_1().min_h(px(0.0)).child(content))
-            .when(self.downloading || self.error.is_some(), |this| {
-                this.child(self.footer())
+            .when(self.download_footer_visible(), |this| {
+                this.child(self.footer(cx))
             })
             .when(logged_in && self.pending_login.is_some(), |this| {
                 this.child(

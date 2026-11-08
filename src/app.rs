@@ -1,7 +1,7 @@
 use crate::auth;
 use crate::blackboard::{self, Course, Replay};
 use crate::config::AppConfig;
-use crate::download::{self, DownloadEvent};
+use crate::download::{DownloadControl, DownloadEvent};
 use crate::http::Http;
 use crate::media::{self, MediaCandidate};
 use crate::share::{Share, ShareClient};
@@ -11,6 +11,7 @@ use gpui_kit::{Context, Entity, ScrollHandle, UniformListScrollHandle, Window};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc::TryRecvError;
 use std::time::Duration;
 use url::Url;
@@ -41,12 +42,28 @@ enum HaoxueFetch {
     Verification(auth::PendingLogin),
 }
 
-#[derive(Clone, Debug)]
-pub struct ProgressState {
+#[derive(Clone)]
+pub struct DownloadTask {
+    pub id: String,
     pub title: String,
+    pub state: DownloadTaskState,
     pub downloaded: u64,
     pub total: u64,
     pub detail: String,
+    pub attempt: u64,
+    pub control: Option<Arc<DownloadControl>>,
+    pub replay: Replay,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DownloadTaskState {
+    Queued,
+    Downloading,
+    Paused,
+    Merging,
+    Done,
+    Skipped,
+    Failed,
 }
 
 pub struct AppState {
@@ -90,7 +107,10 @@ pub struct AppState {
     pub(crate) plaza_loading_more: bool,
     pub(crate) plaza_has_more: bool,
     pub(crate) plaza_total: usize,
-    pub(crate) progress: Option<ProgressState>,
+    pub(crate) download_tasks: Vec<DownloadTask>,
+    pub(crate) download_scroll: ScrollHandle,
+    pub(crate) download_attempt: u64,
+    pub(crate) scheduler: crate::download_manager::DownloadScheduler,
     pub(crate) downloaded: usize,
     pub(crate) skipped: usize,
     pub(crate) failed: usize,
@@ -136,6 +156,8 @@ impl AppState {
         let verification_input = cx.new(|cx| {
             InputState::new(window, cx).placeholder("输入验证码")
         });
+        let (download_tx, download_rx) = std::sync::mpsc::channel::<DownloadEvent>();
+        let scheduler = crate::download_manager::DownloadScheduler::new(download_tx);
 
         let app = Self {
             http: None,
@@ -178,7 +200,10 @@ impl AppState {
             plaza_loading_more: false,
             plaza_has_more: false,
             plaza_total: 0,
-            progress: None,
+            download_tasks: Vec::new(),
+            download_scroll: ScrollHandle::new(),
+            download_attempt: 0,
+            scheduler,
             downloaded: 0,
             skipped: 0,
             failed: 0,
@@ -192,6 +217,23 @@ impl AppState {
                 }
             },
         )
+        .detach();
+        cx.spawn_in(window, async move |this, cx| loop {
+            match download_rx.try_recv() {
+                Ok(event) => {
+                    let _ = this.update_in(cx, |this, _window, cx| {
+                        this.on_download_event(event);
+                        cx.notify();
+                    });
+                }
+                Err(TryRecvError::Empty) => {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(120))
+                        .await;
+                }
+                Err(TryRecvError::Disconnected) => break,
+            }
+        })
         .detach();
         app
     }
@@ -539,11 +581,8 @@ impl AppState {
         self.pending_login = None;
         self.pending_haoxue_course = None;
         self.captcha_path = None;
-        self.progress = None;
         self.replays_loading = false;
         self.replays_loading_label = "正在加载回放…".to_string();
-        self.downloading = false;
-        self.active_downloads.clear();
         self.status = "已退出登录".to_string();
         self.error = None;
         cx.notify();
@@ -935,11 +974,13 @@ impl AppState {
         let pending: Vec<Replay> = self
             .replays
             .iter()
-            .filter(|replay| !self.replay_downloaded(replay))
+            .filter(|replay| {
+                !self.replay_downloaded(replay) && !self.replay_in_progress(replay)
+            })
             .cloned()
             .collect();
         if pending.is_empty() {
-            self.status = "当前课程的回放已全部下载".to_string();
+            self.status = "当前课程的回放已全部下载或正在下载".to_string();
             cx.notify();
             return;
         }
@@ -949,14 +990,28 @@ impl AppState {
     fn download_many(
         &mut self,
         replays: Vec<Replay>,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.busy {
-            self.status = "当前有任务在运行，请稍候".to_string();
-            cx.notify();
-            return;
+        if !self.downloading {
+            let keep_tasks = self.download_tasks.iter().any(|task| {
+                matches!(
+                    task.state,
+                    DownloadTaskState::Paused | DownloadTaskState::Failed
+                )
+            });
+            if !keep_tasks {
+                self.download_tasks.clear();
+                self.download_scroll = ScrollHandle::new();
+                self.downloaded = 0;
+                self.skipped = 0;
+                self.failed = 0;
+            }
         }
+        self.enqueue_downloads(replays, cx);
+    }
+
+    fn enqueue_downloads(&mut self, replays: Vec<Replay>, cx: &mut Context<Self>) {
         let Some(http) = self.http.clone() else {
             self.error = Some("请先登录".to_string());
             cx.notify();
@@ -964,126 +1019,276 @@ impl AppState {
         };
         let replays: Vec<Replay> = replays
             .into_iter()
-            .filter(|replay| !self.replay_downloaded(replay))
+            .filter(|replay| {
+                !self.replay_downloaded(replay)
+                    && !self.active_downloads.contains(&replay.identity())
+            })
             .collect();
         if replays.is_empty() {
-            self.status = "没有需要下载的回放（已全部下载）".to_string();
+            self.status = "没有需要下载的回放（已全部下载或正在下载）".to_string();
             cx.notify();
             return;
         }
-        self.downloading = true;
-        self.active_downloads = replays.iter().map(|replay| replay.identity()).collect();
+
         let output = self.config.download_path();
         let ffmpeg = crate::ffmpeg::resolve(&self.config.ffmpeg);
-        self.busy = true;
+        self.downloading = true;
         self.error = None;
-        self.progress = None;
-        self.downloaded = 0;
-        self.skipped = 0;
-        self.failed = 0;
-        self.status = format!("开始处理 {} 条回放…", replays.len());
+        self.status = format!("已加入下载队列：{} 条", replays.len());
+        for replay in replays {
+            self.download_attempt += 1;
+            let attempt = self.download_attempt;
+            let control = DownloadControl::new();
+            let id = replay.identity();
+            let title = replay.display_title();
+            self.active_downloads.insert(id.clone());
+            let task = DownloadTask {
+                id: id.clone(),
+                title,
+                state: DownloadTaskState::Queued,
+                downloaded: 0,
+                total: 0,
+                detail: "排队中".to_string(),
+                attempt,
+                control: Some(control.clone()),
+                replay: replay.clone(),
+            };
+            if let Some(index) = self
+                .download_tasks
+                .iter()
+                .position(|task| task.id == id)
+            {
+                self.download_tasks[index] = task;
+            } else {
+                self.download_tasks.push(task);
+            }
+            self.scheduler.enqueue(
+                http.clone(),
+                replay,
+                output.clone(),
+                ffmpeg.clone(),
+                attempt,
+                control,
+            );
+        }
         cx.notify();
+    }
 
-        let (tx, rx) = std::sync::mpsc::channel::<DownloadEvent>();
-        std::thread::spawn(move || {
-            for mut replay in replays {
-                let title = replay.display_title();
-                if replay.media.is_empty() {
-                    tx.send(DownloadEvent::Status(format!("解析媒体：{title}"))).ok();
-                    if let Err(error) = blackboard::resolve_media(&http, &mut replay) {
-                        tx.send(DownloadEvent::Failed {
-                            title,
-                            error: format!("{error:#}"),
-                        })
-                        .ok();
-                        continue;
-                    }
-                }
-                match download::download_replay(&http, &replay, &output, &ffmpeg, &tx) {
-                    Ok(_) => {}
-                    Err(error) => {
-                        tx.send(DownloadEvent::Failed {
-                            title,
-                            error: format!("{error:#}"),
-                        })
-                        .ok();
-                    }
-                }
-            }
-            tx.send(DownloadEvent::BatchDone).ok();
-        });
+    fn task_for_attempt(&mut self, id: &str, attempt: u64) -> Option<&mut DownloadTask> {
+        self.download_tasks
+            .iter_mut()
+            .find(|task| task.id == id && task.attempt == attempt)
+    }
 
-        cx.spawn_in(window, async move |this, cx| {
-            let mut done = false;
-            while !done {
-                while let Ok(event) = rx.try_recv() {
-                    let batch_done = matches!(event, DownloadEvent::BatchDone);
-                    let _ = this.update_in(cx, |this, _window, cx| {
-                        this.on_download_event(event);
-                        cx.notify();
-                    });
-                    if batch_done {
-                        done = true;
-                        break;
-                    }
-                }
-                if !done {
-                    cx.background_executor()
-                        .timer(Duration::from_millis(120))
-                        .await;
-                }
-            }
-        })
-        .detach();
+    fn finish_downloads_if_idle(&mut self) {
+        if !self.active_downloads.is_empty() {
+            return;
+        }
+        self.downloading = false;
+        if self
+            .download_tasks
+            .iter()
+            .any(|task| task.state == DownloadTaskState::Paused)
+        {
+            self.status = format!(
+                "下载结束：新增 {}，跳过 {}，失败 {}（部分任务已暂停）",
+                self.downloaded, self.skipped, self.failed
+            );
+        } else {
+            self.status = format!(
+                "下载完成：新增 {}，跳过 {}，失败 {}",
+                self.downloaded, self.skipped, self.failed
+            );
+        }
+    }
+
+    pub(crate) fn pause_download(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(task) = self
+            .download_tasks
+            .iter_mut()
+            .find(|task| task.id == id)
+        else {
+            return;
+        };
+        if task.state != DownloadTaskState::Downloading {
+            return;
+        }
+        if let Some(control) = &task.control {
+            control.pause();
+        }
+        task.state = DownloadTaskState::Paused;
+        task.detail = "已暂停".to_string();
+        let title = task.title.clone();
+        self.active_downloads.remove(id);
+        self.downloading = !self.active_downloads.is_empty();
+        self.status = format!("已暂停：{title}");
+        cx.notify();
+    }
+
+    pub(crate) fn resume_download(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(replay) = self
+            .download_tasks
+            .iter()
+            .find(|task| task.id == id)
+            .filter(|task| {
+                matches!(
+                    task.state,
+                    DownloadTaskState::Paused | DownloadTaskState::Failed
+                )
+            })
+            .map(|task| task.replay.clone())
+        else {
+            return;
+        };
+        self.enqueue_downloads(vec![replay], cx);
+    }
+
+    pub(crate) fn stop_download(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(index) = self
+            .download_tasks
+            .iter()
+            .position(|task| task.id == id)
+        else {
+            return;
+        };
+        let task = &self.download_tasks[index];
+        if matches!(
+            task.state,
+            DownloadTaskState::Done | DownloadTaskState::Skipped | DownloadTaskState::Failed
+        ) {
+            return;
+        }
+        if let Some(control) = &task.control {
+            control.stop();
+        }
+        let title = task.title.clone();
+        self.download_tasks.remove(index);
+        self.active_downloads.remove(id);
+        self.downloading = !self.active_downloads.is_empty();
+        self.status = format!("已停止并移出队列：{title}");
+        cx.notify();
+    }
+
+    pub(crate) fn download_footer_visible(&self) -> bool {
+        self.downloading
+            || self.error.is_some()
+            || self.download_tasks.iter().any(|task| {
+                matches!(
+                    task.state,
+                    DownloadTaskState::Paused | DownloadTaskState::Failed
+                )
+            })
     }
 
     fn on_download_event(&mut self, event: DownloadEvent) {
         match event {
-            DownloadEvent::Status(status) => self.status = status,
             DownloadEvent::Progress {
+                attempt,
+                id,
                 title,
                 downloaded,
                 total,
                 detail,
+                merging,
             } => {
-                self.status = title.clone();
-                self.progress = Some(ProgressState {
-                    title,
-                    downloaded,
-                    total,
-                    detail,
-                });
+                let paused = match self.task_for_attempt(&id, attempt) {
+                    Some(task) => match task.state {
+                        DownloadTaskState::Paused => {
+                            task.downloaded = downloaded;
+                            task.total = total;
+                            task.detail = detail.clone();
+                            true
+                        }
+                        DownloadTaskState::Done
+                        | DownloadTaskState::Skipped
+                        | DownloadTaskState::Failed => return,
+                        _ => {
+                            task.state = if merging {
+                                DownloadTaskState::Merging
+                            } else {
+                                DownloadTaskState::Downloading
+                            };
+                            task.downloaded = downloaded;
+                            task.total = total;
+                            task.detail = detail.clone();
+                            false
+                        }
+                    },
+                    None => return,
+                };
+                if !paused {
+                    self.status = format!("{title}：{detail}");
+                }
             }
             DownloadEvent::Done {
+                attempt,
+                id,
                 title,
                 path,
                 skipped,
             } => {
+                if self.task_for_attempt(&id, attempt).is_none() {
+                    return;
+                }
+                if let Some(task) = self.task_for_attempt(&id, attempt) {
+                    task.state = if skipped {
+                        DownloadTaskState::Skipped
+                    } else {
+                        DownloadTaskState::Done
+                    };
+                    task.total = task.total.max(task.downloaded);
+                    task.downloaded = task.total;
+                    task.detail = path.display().to_string();
+                }
+                self.active_downloads.remove(&id);
                 if skipped {
                     self.skipped += 1;
-                    self.status = format!("已存在，跳过：{}", path.display());
+                    self.status = format!("已存在，跳过：{title}");
                 } else {
                     self.downloaded += 1;
                     self.status = format!("已保存：{}", path.display());
                 }
-                self.progress = None;
-                let _ = title;
+                self.finish_downloads_if_idle();
             }
-            DownloadEvent::Failed { title, error } => {
+            DownloadEvent::Stopped { attempt, id, title } => {
+                if self.task_for_attempt(&id, attempt).is_none() {
+                    return;
+                }
+                self.download_tasks.retain(|task| task.id != id);
+                self.active_downloads.remove(&id);
+                self.downloading = !self.active_downloads.is_empty();
+                self.status = format!("已停止并移出队列：{title}");
+            }
+            DownloadEvent::Paused { attempt, id, title } => {
+                if self.task_for_attempt(&id, attempt).is_none() {
+                    return;
+                }
+                if let Some(task) = self.task_for_attempt(&id, attempt) {
+                    task.state = DownloadTaskState::Paused;
+                    task.detail = "已暂停".to_string();
+                }
+                self.active_downloads.remove(&id);
+                self.downloading = !self.active_downloads.is_empty();
+                self.status = format!("已暂停：{title}");
+            }
+            DownloadEvent::Failed {
+                attempt,
+                id,
+                title,
+                error,
+            } => {
+                if self.task_for_attempt(&id, attempt).is_none() {
+                    return;
+                }
+                if let Some(task) = self.task_for_attempt(&id, attempt) {
+                    task.state = DownloadTaskState::Failed;
+                    task.detail = error.clone();
+                }
+                self.active_downloads.remove(&id);
                 self.failed += 1;
                 self.error = Some(format!("{title}：{error}"));
                 self.status = format!("失败：{title}");
-                self.progress = None;
-            }
-            DownloadEvent::BatchDone => {
-                self.busy = false;
-                self.downloading = false;
-                self.active_downloads.clear();
-                self.progress = None;
-                self.status = format!(
-                    "下载完成：新增 {}，跳过 {}，失败 {}",
-                    self.downloaded, self.skipped, self.failed
-                );
+                self.finish_downloads_if_idle();
             }
         }
     }

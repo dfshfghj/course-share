@@ -6,6 +6,7 @@ mod blackboard;
 mod config;
 mod cookies;
 mod download;
+mod download_manager;
 mod ffmpeg;
 mod haoxue;
 mod http;
@@ -23,7 +24,9 @@ use gpui_kit::prelude::*;
 use gpui_kit::{point, px, size, Bounds, TitlebarOptions, WindowBounds, WindowOptions};
 
 fn main() {
-    gpui_kit::application().run(|cx| {
+    gpui_kit::application()
+        .with_assets(gpui_kit::assets::Assets)
+        .run(|cx| {
         gpui_kit::init(cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds::new(
