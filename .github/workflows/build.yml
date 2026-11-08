@@ -213,3 +213,41 @@ jobs:
           name: course-share-${{ matrix.name }}
           path: dist/course-share-${{ matrix.name }}
           retention-days: 14
+
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [app]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download packaged apps
+        uses: actions/download-artifact@v4
+        with:
+          pattern: course-share-*
+          path: release
+
+      - name: Archive release assets
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends zip
+          cd release
+          for dir in course-share-*/; do
+            name="${dir%/}"
+            if [[ "$name" == *windows* ]]; then
+              zip -qr "$name.zip" "$name"
+            else
+              tar -czf "$name.tar.gz" "$name"
+            fi
+          done
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Course Share ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            release/*.tar.gz
+            release/*.zip
