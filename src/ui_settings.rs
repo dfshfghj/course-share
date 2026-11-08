@@ -1,8 +1,9 @@
 use crate::app::AppState;
+use crate::theme::tone;
 use crate::ui::{panel, subtitle, title, DANGER, MUTED, SUCCESS};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_kit::prelude::*;
-use gpui_kit::{div, px, rgb, Context, IntoElement, Window};
+use gpui_kit::{div, px, Context, IntoElement, Window};
 
 impl AppState {
     pub(crate) fn settings_view(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -20,6 +21,37 @@ impl AppState {
                     .flex_col()
                     .gap_4()
                     .child(title("设置"))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(subtitle("主题"))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(self.theme_button(
+                                        "theme-auto",
+                                        "跟随系统",
+                                        crate::theme::ThemeMode::Auto,
+                                        cx,
+                                    ))
+                                    .child(self.theme_button(
+                                        "theme-light",
+                                        "浅色",
+                                        crate::theme::ThemeMode::Light,
+                                        cx,
+                                    ))
+                                    .child(self.theme_button(
+                                        "theme-dark",
+                                        "深色",
+                                        crate::theme::ThemeMode::Dark,
+                                        cx,
+                                    )),
+                            ),
+                    )
                     .child(
                         div()
                             .flex()
@@ -46,7 +78,7 @@ impl AppState {
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(rgb(if ffmpeg.source == "未找到" {
+                                    .text_color(tone(if ffmpeg.source == "未找到" {
                                         DANGER
                                     } else {
                                         MUTED
@@ -110,7 +142,7 @@ impl AppState {
                         this.child(
                             div()
                                 .text_sm()
-                                .text_color(rgb(DANGER))
+                                .text_color(tone(DANGER))
                                 .child(error),
                         )
                     })
@@ -122,10 +154,25 @@ impl AppState {
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(rgb(SUCCESS))
+                                    .text_color(tone(SUCCESS))
                                     .child("v 0.1.0"),
                             )
                     ),
             )
+    }
+
+    fn theme_button(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        mode: crate::theme::ThemeMode,
+        cx: &mut Context<Self>,
+    ) -> Button {
+        let selected = crate::theme::ThemeMode::from_pref(&self.config.theme) == mode;
+        let button = Button::new(id).label(label);
+        let button = if selected { button.primary() } else { button.ghost() };
+        button.on_click(cx.listener(move |this, _, _, cx| {
+            this.set_theme(mode, cx);
+        }))
     }
 }

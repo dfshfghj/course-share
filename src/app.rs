@@ -1633,6 +1633,13 @@ impl AppState {
         );
     }
 
+    pub(crate) fn set_theme(&mut self, mode: crate::theme::ThemeMode, cx: &mut Context<Self>) {
+        self.config.theme = mode.pref().to_string();
+        let _ = self.config.save();
+        crate::theme::apply(mode.pref(), cx);
+        cx.notify();
+    }
+
     pub(crate) fn is_course_starred(&self, key: &str, name: &str) -> bool {
         self.starred_courses.contains(key)
             || self.starred_courses.contains(name.trim())

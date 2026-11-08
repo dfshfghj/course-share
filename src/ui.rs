@@ -1,11 +1,12 @@
 use crate::app::{AppState, DownloadTask, DownloadTaskState, LoginMode};
+use crate::theme::tone;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputState};
 use gpui_component::Disableable as _;
 use gpui_component::{IconName, Sizable as _};
 use gpui_kit::Focusable as _;
 use gpui_kit::prelude::*;
-use gpui_kit::{div, px, rgb, AnyElement, Context, ElementId, Entity, FontWeight, IntoElement, MouseButton, Render, Window};
+use gpui_kit::{div, px, AnyElement, Context, ElementId, Entity, FontWeight, IntoElement, MouseButton, Render, Window};
 
 pub(crate) const BG: u32 = 0xf3f5f9;
 pub(crate) const PANEL: u32 = 0xffffff;
@@ -20,9 +21,9 @@ pub(crate) const WARN: u32 = 0xb45309;
 
 pub(crate) fn panel() -> gpui_kit::Div {
     div()
-        .bg(rgb(PANEL))
+        .bg(tone(PANEL))
         .border_1()
-        .border_color(rgb(BORDER))
+        .border_color(tone(BORDER))
 }
 
 pub(crate) fn input_field(
@@ -45,16 +46,16 @@ pub(crate) fn input_field(
                 .w_full()
                 .focus_bordered(false)
                 .rounded_sm()
-                .bg(rgb(PANEL))
-                .border_color(rgb(BORDER))
-                .text_color(rgb(TEXT)),
+                .bg(tone(PANEL))
+                .border_color(tone(BORDER))
+                .text_color(tone(TEXT)),
         )
 }
 
 pub(crate) fn subtitle(text: impl Into<String>) -> gpui_kit::Div {
     div()
         .text_sm()
-        .text_color(rgb(MUTED))
+        .text_color(tone(MUTED))
         .child(gpui_kit::SharedString::from(text.into()))
 }
 
@@ -218,7 +219,7 @@ impl AppState {
         };
 
         let card = card.when_some(self.error.clone(), |this, error| {
-            this.child(div().text_sm().text_color(rgb(DANGER)).child(error))
+            this.child(div().text_sm().text_color(tone(DANGER)).child(error))
         });
 
         div()
@@ -270,9 +271,9 @@ impl AppState {
             .flex()
             .flex_col()
             .gap_1()
-            .bg(rgb(PANEL))
+            .bg(tone(PANEL))
             .border_1()
-            .border_color(rgb(BORDER))
+            .border_color(tone(BORDER))
             .child(
                 div()
                     .flex()
@@ -285,7 +286,7 @@ impl AppState {
                             .min_w_0()
                             .truncate()
                             .text_sm()
-                            .text_color(if self.error.is_some() { rgb(DANGER) } else { rgb(MUTED) })
+                            .text_color(if self.error.is_some() { tone(DANGER) } else { tone(MUTED) })
                             .child(
                                 self.error
                                     .clone()
@@ -298,7 +299,7 @@ impl AppState {
                     .child(subtitle(summary).flex_none()),
             )
             .when(!self.download_tasks.is_empty(), |this| {
-                this.child(div().h(px(1.0)).w_full().bg(rgb(BORDER))).child(
+                this.child(div().h(px(1.0)).w_full().bg(tone(BORDER))).child(
                     div()
                         .flex()
                         .w_full()
@@ -421,7 +422,7 @@ impl AppState {
                     .w(px(40.0))
                     .flex_none()
                     .text_sm()
-                    .text_color(rgb(color))
+                    .text_color(tone(color))
                     .child(label),
             )
             .child(
@@ -429,13 +430,13 @@ impl AppState {
                     .w(px(130.0))
                     .flex_none()
                     .h(px(6.0))
-                    .bg(rgb(BORDER))
+                    .bg(tone(BORDER))
                     .rounded_full()
                     .child(
                         div()
                             .w(px(130.0 * fraction))
                             .h(px(6.0))
-                            .bg(rgb(color))
+                            .bg(tone(color))
                             .rounded_full(),
                     ),
             )
@@ -445,7 +446,7 @@ impl AppState {
                     .min_w_0()
                     .truncate()
                     .text_sm()
-                    .text_color(rgb(MUTED))
+                    .text_color(tone(MUTED))
                     .child(task.detail.clone()),
             )
             .child(div().flex().items_center().gap_1().children(actions))
@@ -465,8 +466,8 @@ impl Render for AppState {
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(BG))
-            .text_color(rgb(TEXT))
+            .bg(tone(BG))
+            .text_color(tone(TEXT))
             .child(
                 gpui_component::TitleBar::new().child(
                     div()
@@ -529,7 +530,7 @@ impl Render for AppState {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .bg(rgb(BG))
+                        .bg(tone(BG))
                         .child(self.login_view(cx)),
                 )
             })

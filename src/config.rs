@@ -11,8 +11,8 @@ pub struct AppConfig {
     pub download_dir: String,
     #[serde(default = "default_ffmpeg")]
     pub ffmpeg: String,
-    #[serde(default)]
-    pub dark: bool,
+    #[serde(default = "default_theme")]
+    pub theme: String,
     #[serde(default)]
     pub starred_courses: Vec<String>,
 }
@@ -35,13 +35,17 @@ fn default_ffmpeg() -> String {
     String::new()
 }
 
+fn default_theme() -> String {
+    "auto".to_string()
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
             backend_url: default_backend(),
             download_dir: default_download_dir(),
             ffmpeg: default_ffmpeg(),
-            dark: false,
+            theme: default_theme(),
             starred_courses: Vec::new(),
         }
     }

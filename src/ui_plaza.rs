@@ -1,5 +1,6 @@
 use crate::app::AppState;
 use crate::share::Share;
+use crate::theme::tone;
 use crate::ui::{subtitle, title, BORDER, MUTED, PANEL, PRIMARY};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::spinner::Spinner;
@@ -7,7 +8,7 @@ use gpui_component::Disableable as _;
 use gpui_component::Sizable as _;
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    div, px, rgb, uniform_list, AnyElement, Context, ElementId, FontWeight, IntoElement,
+    div, px, uniform_list, AnyElement, Context, ElementId, FontWeight, IntoElement,
     ScrollWheelEvent, Window,
 };
 
@@ -49,12 +50,12 @@ impl AppState {
                 .flex()
                 .flex_col()
                 .gap_2()
-                .bg(rgb(PANEL))
+                .bg(tone(PANEL))
                 .border_1()
-                .border_color(rgb(BORDER))
+                .border_color(tone(BORDER))
                 .rounded_sm()
                 .cursor_pointer()
-                .hover(|style| style.border_color(rgb(PRIMARY)))
+                .hover(|style| style.border_color(tone(PRIMARY)))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.select_plaza_course(key_for_open.clone(), window, cx);
                 }))
@@ -108,7 +109,7 @@ impl AppState {
                     .items_center()
                     .justify_center()
                     .border_b_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(tone(BORDER))
                     .child(
                         div()
                             .w(px(520.0))
@@ -265,7 +266,7 @@ impl AppState {
                     .items_center()
                     .justify_between()
                     .border_b_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(tone(BORDER))
                     .child(
                         div()
                             .flex()
@@ -355,8 +356,8 @@ impl AppState {
             .justify_between()
             .gap_4()
             .border_b_1()
-            .border_color(rgb(BORDER))
-            .hover(|style| style.bg(rgb(0xf8fafc)))
+            .border_color(tone(BORDER))
+            .hover(|style| style.bg(tone(0xf8fafc)))
             .child(
                 div()
                     .flex_1()
@@ -369,7 +370,7 @@ impl AppState {
                     .w(px(170.0))
                     .flex_none()
                     .text_sm()
-                    .text_color(rgb(MUTED))
+                    .text_color(tone(MUTED))
                     .truncate()
                     .child(time),
             )

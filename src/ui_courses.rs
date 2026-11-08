@@ -1,4 +1,5 @@
 use crate::app::{AppState, SidebarSection, Tab};
+use crate::theme::tone;
 use crate::ui::{subtitle, title, BORDER, DANGER, MUTED, PANEL, PRIMARY, PRIMARY_SOFT, SUCCESS};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::spinner::Spinner;
@@ -6,7 +7,7 @@ use gpui_component::Disableable as _;
 use gpui_component::{IconName, Sizable as _};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    div, px, rgb, uniform_list, AnyElement, Context, ElementId, FontWeight, IntoElement, Window,
+    div, px, uniform_list, AnyElement, Context, ElementId, FontWeight, IntoElement, Window,
 };
 
 #[derive(Clone)]
@@ -174,9 +175,9 @@ impl AppState {
             .flex()
             .flex_col()
             .flex_none()
-            .bg(rgb(PANEL))
+            .bg(tone(PANEL))
             .border_r_1()
-            .border_color(rgb(BORDER))
+            .border_color(tone(BORDER))
             .child(self.plaza_entry(cx))
             .child(
                 div()
@@ -206,9 +207,9 @@ impl AppState {
             .gap_2()
             .cursor_pointer()
             .border_b_1()
-            .border_color(rgb(BORDER))
-            .when(selected, |this| this.bg(rgb(PRIMARY_SOFT)))
-            .when(!selected, |this| this.hover(|style| style.bg(rgb(0xf1f5f9))))
+            .border_color(tone(BORDER))
+            .when(selected, |this| this.bg(tone(PRIMARY_SOFT)))
+            .when(!selected, |this| this.hover(|style| style.bg(tone(0xf1f5f9))))
             .on_click(cx.listener(|this, _, window, cx| {
                 this.open_plaza(window, cx);
             }))
@@ -220,7 +221,7 @@ impl AppState {
                     } else {
                         FontWeight::NORMAL
                     })
-                    .text_color(if selected { rgb(PRIMARY) } else { rgb(MUTED) })
+                    .text_color(if selected { tone(PRIMARY) } else { tone(MUTED) })
                     .child("广场"),
             )
             .into_any_element()
@@ -238,7 +239,7 @@ impl AppState {
             .justify_between()
             .gap_2()
             .border_t_1()
-            .border_color(rgb(BORDER))
+            .border_color(tone(BORDER))
             .child(
                 div()
                     .flex()
@@ -249,7 +250,7 @@ impl AppState {
                             .w(px(8.0))
                             .h(px(8.0))
                             .rounded_full()
-                            .bg(rgb(if logged_in { SUCCESS } else { MUTED })),
+                            .bg(tone(if logged_in { SUCCESS } else { MUTED })),
                     )
                     .child(subtitle(if logged_in { "已登录" } else { "未登录" })),
             )
@@ -293,11 +294,11 @@ impl AppState {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .bg(rgb(0xeef2f8))
+                    .bg(tone(0xeef2f8))
                     .border_t_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(tone(BORDER))
                     .cursor_pointer()
-                    .hover(|style| style.bg(rgb(0xe6ecf5)))
+                    .hover(|style| style.bg(tone(0xe6ecf5)))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.toggle_sidebar_section(section, window, cx);
                     }))
@@ -308,7 +309,7 @@ impl AppState {
                             .flex()
                             .items_center()
                             .gap_2()
-                            .child(div().text_sm().text_color(rgb(0x64748b)).child(arrow))
+                            .child(div().text_sm().text_color(tone(0x64748b)).child(arrow))
                             .child(
                                 div()
                                     .flex_1()
@@ -338,9 +339,9 @@ impl AppState {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .bg(rgb(0xf8fafc))
+                    .bg(tone(0xf8fafc))
                     .cursor_pointer()
-                    .hover(|style| style.bg(rgb(0xf1f5f9)))
+                    .hover(|style| style.bg(tone(0xf1f5f9)))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.toggle_term(term_for_click.clone(), cx);
                     }))
@@ -351,7 +352,7 @@ impl AppState {
                             .flex()
                             .items_center()
                             .gap_2()
-                            .child(div().text_sm().text_color(rgb(0x64748b)).child(arrow))
+                            .child(div().text_sm().text_color(tone(0x64748b)).child(arrow))
                             .child(
                                 div()
                                     .flex_1()
@@ -413,8 +414,8 @@ impl AppState {
             .flex()
             .items_center()
             .cursor_pointer()
-            .when(selected, |this| this.bg(rgb(PRIMARY_SOFT)))
-            .when(!selected, |this| this.hover(|style| style.bg(rgb(0xf1f5f9))))
+            .when(selected, |this| this.bg(tone(PRIMARY_SOFT)))
+            .when(!selected, |this| this.hover(|style| style.bg(tone(0xf1f5f9))))
             .on_click(on_click)
             .child(
                 div()
@@ -511,7 +512,7 @@ impl AppState {
                     .items_center()
                     .justify_between()
                     .border_b_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(tone(BORDER))
                     .child(
                         div()
                             .flex()
@@ -632,7 +633,7 @@ impl AppState {
                     .items_center()
                     .justify_between()
                     .border_b_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(tone(BORDER))
                     .child(title_block)
                     .child(
                         div()
@@ -701,7 +702,7 @@ impl AppState {
                         .child(
                             div()
                                 .text_sm()
-                                .text_color(rgb(DANGER))
+                                .text_color(tone(DANGER))
                                 .child("没有解析到回放。"),
                         ),
                 )
@@ -761,8 +762,8 @@ impl AppState {
             .justify_between()
             .gap_4()
             .border_b_1()
-            .border_color(rgb(BORDER))
-            .hover(|style| style.bg(rgb(0xf8fafc)))
+            .border_color(tone(BORDER))
+            .hover(|style| style.bg(tone(0xf8fafc)))
             .child(
                 div()
                     .flex_1()
@@ -775,7 +776,7 @@ impl AppState {
                     .w(px(170.0))
                     .flex_none()
                     .text_sm()
-                    .text_color(rgb(MUTED))
+                    .text_color(tone(MUTED))
                     .truncate()
                     .child(time),
             )
