@@ -39,6 +39,15 @@ pub struct Share {
 }
 
 impl Share {
+    pub fn course_key(&self) -> String {
+        let id = self.course_id.trim();
+        if id.is_empty() {
+            format!("name:{}", self.course_name.trim())
+        } else {
+            format!("id:{id}")
+        }
+    }
+
     pub fn from_replay(course: &Course, replay: &Replay, uploader: &str) -> Option<Self> {
         let candidate = replay
             .media
@@ -120,22 +129,36 @@ impl ShareClient {
     }
 
     pub fn list(&self, query: &str) -> Result<Vec<Share>> {
-        let mut url = Url::parse(&format!("{}/api/shares", self.base_url))
-            .with_context(|| format!("invalid backend URL {}", self.base_url))?;
-        url.query_pairs_mut()
-            .append_pair("limit", "200")
-            .append_pair("q", query);
-        let response = self
-            .client
-            .get(url.as_str())
-            .send()
-            .with_context(|| format!("GET {}", url.as_str()))?;
-        let value = parse_json(response)?;
-        let shares = value
-            .get("shares")
-            .cloned()
-            .unwrap_or_else(|| serde_json::Value::Array(Vec::new()));
-        serde_json::from_value(shares).context("parse share list")
+        const PAGE: usize = 200;
+        let mut all = Vec::new();
+        let mut offset = 0usize;
+        for _ in 0..50 {
+            let mut url = Url::parse(&format!("{}/api/shares", self.base_url))
+                .with_context(|| format!("invalid backend URL {}", self.base_url))?;
+            url.query_pairs_mut()
+                .append_pair("limit", &PAGE.to_string())
+                .append_pair("offset", &offset.to_string())
+                .append_pair("q", query);
+            let response = self
+                .client
+                .get(url.as_str())
+                .send()
+                .with_context(|| format!("GET {}", url.as_str()))?;
+            let value = parse_json(response)?;
+            let shares = value
+                .get("shares")
+                .cloned()
+                .unwrap_or_else(|| serde_json::Value::Array(Vec::new()));
+            let page: Vec<Share> =
+                serde_json::from_value(shares).context("parse share list")?;
+            let count = page.len();
+            all.extend(page);
+            if count < PAGE {
+                break;
+            }
+            offset += count;
+        }
+        Ok(all)
     }
 
     pub fn publish(&self, share: &Share) -> Result<Share> {

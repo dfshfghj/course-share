@@ -19,6 +19,17 @@ pub struct Course {
     pub url: String,
 }
 
+impl Course {
+    pub fn key(&self) -> String {
+        let id = self.id.trim();
+        if id.is_empty() {
+            format!("name:{}", self.name.trim())
+        } else {
+            format!("id:{id}")
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Replay {
     pub course_id: String,

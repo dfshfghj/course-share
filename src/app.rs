@@ -34,6 +34,11 @@ pub enum SidebarSection {
     Favorites,
 }
 
+enum HaoxueFetch {
+    Replays { http: Http, replays: Vec<Replay> },
+    Verification(auth::PendingLogin),
+}
+
 #[derive(Clone, Debug)]
 pub struct ProgressState {
     pub title: String,
@@ -76,6 +81,8 @@ pub struct AppState {
     pub(crate) selected_course: Option<usize>,
     pub(crate) replays: Vec<Replay>,
     pub(crate) replays_loading: bool,
+    pub(crate) replays_loading_label: String,
+    pub(crate) pending_haoxue_course: Option<Course>,
     pub(crate) shares: Vec<Share>,
     pub(crate) progress: Option<ProgressState>,
     pub(crate) downloaded: usize,
@@ -86,12 +93,18 @@ pub struct AppState {
 impl AppState {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let config = AppConfig::load();
+        let credentials = crate::config::Credentials::load();
         let starred_courses: HashSet<String> = config.starred_courses.iter().cloned().collect();
-        let username = cx.new(|cx| InputState::new(window, cx).placeholder("学号"));
+        let username = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("学号")
+                .default_value(credentials.username.clone())
+        });
         let password = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("密码")
                 .masked(true)
+                .default_value(credentials.password.clone())
         });
         let cookie_input = cx.new(|cx| {
             InputState::new(window, cx).placeholder("粘贴 Cookie：name=value; name2=value2")
@@ -152,6 +165,8 @@ impl AppState {
             selected_course: None,
             replays: Vec::new(),
             replays_loading: false,
+            replays_loading_label: "正在加载回放…".to_string(),
+            pending_haoxue_course: None,
             shares: Vec::new(),
             progress: None,
             downloaded: 0,
@@ -220,10 +235,26 @@ impl AppState {
                     this.status = "已恢复登录状态".to_string();
                     this.load_courses(window, cx);
                 } else {
-                    this.status = "已保存的 Cookie 已失效，请重新登录".to_string();
+                    let username = this.username.read(cx).value().trim().to_string();
+                    let password = this.password.read(cx).value().to_string();
+                    if !username.is_empty() && !password.is_empty() {
+                        this.status = "登录状态已失效，正在自动重新登录…".to_string();
+                        this.error = None;
+                        this.start_login(window, cx);
+                    } else {
+                        this.status = "已保存的 Cookie 已失效，请重新登录".to_string();
+                    }
                 }
             },
         );
+    }
+
+    fn remember_credentials(&self, cx: &Context<Self>) {
+        let username = self.username.read(cx).value().trim().to_string();
+        let password = self.password.read(cx).value().to_string();
+        if !username.is_empty() && !password.is_empty() {
+            let _ = crate::config::Credentials { username, password }.save();
+        }
     }
 
     pub(crate) fn start_login(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -253,6 +284,7 @@ impl AppState {
                         this.http = Some(http);
                         this.pending_login = None;
                         this.captcha_path = None;
+                        this.remember_credentials(cx);
                         this.status = "登录成功".to_string();
                         this.load_courses(window, cx);
                     }
@@ -353,8 +385,14 @@ impl AppState {
                         this.http = Some(http);
                         this.pending_login = None;
                         this.captcha_path = None;
-                        this.status = "登录成功".to_string();
-                        this.load_courses(window, cx);
+                        this.remember_credentials(cx);
+                        if let Some(course) = this.pending_haoxue_course.take() {
+                            this.status = "好学登录成功，正在查询回放…".to_string();
+                            this.start_haoxue_fallback(course, window, cx);
+                        } else {
+                            this.status = "登录成功".to_string();
+                            this.load_courses(window, cx);
+                        }
                     }
                     Ok(auth::LoginOutcome::Verification(pending)) => {
                         this.pending_login = Some(pending);
@@ -379,13 +417,18 @@ impl AppState {
 
     pub(crate) fn cancel_verification(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.pending_login = None;
+        let was_haoxue = self.pending_haoxue_course.take().is_some();
         if let Some(path) = self.captcha_path.take() {
             let _ = std::fs::remove_file(path);
         }
         self.verification_input
             .update(cx, |input, cx| input.set_value("", window, cx));
         self.error = None;
-        self.status = "已取消二次验证".to_string();
+        self.status = if was_haoxue {
+            "已取消好学登录".to_string()
+        } else {
+            "已取消二次验证".to_string()
+        };
         cx.notify();
     }
 
@@ -459,6 +502,7 @@ impl AppState {
         if let Some(http) = &self.http {
             let _ = http.clear_cookies();
         }
+        crate::config::Credentials::clear();
         self.http = None;
         self.courses.clear();
         self.replays.clear();
@@ -469,9 +513,11 @@ impl AppState {
         self.collapsed_terms.clear();
         self.sidebar_section = SidebarSection::Courses;
         self.pending_login = None;
+        self.pending_haoxue_course = None;
         self.captcha_path = None;
         self.progress = None;
         self.replays_loading = false;
+        self.replays_loading_label = "正在加载回放…".to_string();
         self.downloading = false;
         self.active_downloads.clear();
         self.status = "已退出登录".to_string();
@@ -592,6 +638,7 @@ impl AppState {
         };
         self.replays = Self::load_replay_cache(&course);
         self.replays_loading = true;
+        self.replays_loading_label = "正在加载回放…".to_string();
         self.error = None;
         self.status = format!("加载回放：{}", course.name);
         cx.notify();
@@ -602,7 +649,7 @@ impl AppState {
             window,
             cx,
             move || blackboard::list_replays(&http, &course_for_load),
-            move |this, result, _window, cx| {
+            move |this, result, window, cx| {
                 let current_id = this
                     .selected_course
                     .and_then(|index| this.courses.get(index))
@@ -611,17 +658,22 @@ impl AppState {
                 if !is_current {
                     // Cache the result even if the user already switched away.
                     if let Ok(fresh) = result {
-                        let cached = Self::load_replay_cache(&course_for_apply);
-                        Self::save_replay_cache(
-                            &course_for_apply,
-                            &Self::merge_replays(cached, fresh),
-                        );
+                        if !fresh.is_empty() {
+                            let cached = Self::load_replay_cache(&course_for_apply);
+                            Self::save_replay_cache(
+                                &course_for_apply,
+                                &Self::merge_replays(cached, fresh),
+                            );
+                        }
                     }
                     return;
                 }
-                this.replays_loading = false;
                 match result {
+                    Ok(fresh) if fresh.is_empty() => {
+                        this.start_haoxue_fallback(course_for_apply.clone(), window, cx);
+                    }
                     Ok(fresh) => {
+                        this.replays_loading = false;
                         let cached = this.replays.clone();
                         this.replays = Self::merge_replays(cached, fresh);
                         Self::save_replay_cache(&course_for_apply, &this.replays);
@@ -635,13 +687,113 @@ impl AppState {
                             this.replays.len(),
                             with_media
                         );
+                        cx.notify();
                     }
                     Err(error) => {
+                        this.replays_loading = false;
                         this.status = "回放加载失败".to_string();
                         this.error = Some(if this.replays.is_empty() {
                             format!("{error:#}")
                         } else {
                             format!("刷新失败，显示本地缓存：{error:#}")
+                        });
+                        cx.notify();
+                    }
+                }
+            },
+        );
+    }
+
+    fn start_haoxue_fallback(
+        &mut self,
+        course: Course,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(http) = self.http.clone() else {
+            return;
+        };
+        let username = self.username.read(cx).value().trim().to_string();
+        let password = self.password.read(cx).value().to_string();
+        self.replays_loading = true;
+        self.replays_loading_label = "正在查询好学…".to_string();
+        self.error = None;
+        self.status = "教学网没有解析到回放，正在查询好学…".to_string();
+        cx.notify();
+
+        let course_for_load = course.clone();
+        let course_for_apply = course.clone();
+        self.run_blocking(
+            window,
+            cx,
+            move || -> anyhow::Result<HaoxueFetch> {
+                if crate::haoxue::session_valid(&http) {
+                    crate::haoxue::normalize_cookies(&http);
+                    let replays = crate::haoxue::list_replays(&http, &course_for_load)?;
+                    return Ok(HaoxueFetch::Replays { http, replays });
+                }
+                match auth::begin_haoxue_login(&username, &password, AppConfig::cookie_path())? {
+                    auth::LoginOutcome::Success(haoxue_http) => {
+                        let replays =
+                            crate::haoxue::list_replays(&haoxue_http, &course_for_load)?;
+                        Ok(HaoxueFetch::Replays {
+                            http: haoxue_http,
+                            replays,
+                        })
+                    }
+                    auth::LoginOutcome::Verification(pending) => {
+                        Ok(HaoxueFetch::Verification(pending))
+                    }
+                    auth::LoginOutcome::Failed(message) => Err(anyhow::anyhow!(message)),
+                }
+            },
+            move |this, result, _window, cx| {
+                let current_id = this
+                    .selected_course
+                    .and_then(|index| this.courses.get(index))
+                    .map(|current| current.id.clone());
+                let is_current = current_id.as_deref() == Some(course_for_apply.id.as_str());
+                match result {
+                    Ok(HaoxueFetch::Replays { http, replays }) => {
+                        this.http = Some(http);
+                        if !is_current {
+                            let cached = Self::load_replay_cache(&course_for_apply);
+                            Self::save_replay_cache(
+                                &course_for_apply,
+                                &Self::merge_replays(cached, replays),
+                            );
+                            return;
+                        }
+                        this.replays_loading = false;
+                        let cached = this.replays.clone();
+                        this.replays = Self::merge_replays(cached, replays);
+                        Self::save_replay_cache(&course_for_apply, &this.replays);
+                        this.error = None;
+                        this.status = if this.replays.is_empty() {
+                            "教学网和好学都没有解析到回放".to_string()
+                        } else {
+                            format!("好学回放 {} 条", this.replays.len())
+                        };
+                    }
+                    Ok(HaoxueFetch::Verification(pending)) => {
+                        if !is_current {
+                            return;
+                        }
+                        this.replays_loading = false;
+                        this.pending_login = Some(pending);
+                        this.pending_haoxue_course = Some(course_for_apply);
+                        this.status = "好学登录需要二次验证".to_string();
+                    }
+                    Err(error) => {
+                        if !is_current {
+                            return;
+                        }
+                        this.replays_loading = false;
+                        this.status = "好学查询失败".to_string();
+                        this.error = Some(if this.replays.is_empty() {
+                            format!("{error:#}")
+                        } else {
+                            format!("好学查询失败，保留本地缓存：{error:#}")
                         });
                     }
                 }
@@ -994,12 +1146,24 @@ impl AppState {
         cx.notify();
     }
 
-    pub(crate) fn toggle_star_course(&mut self, name: String, cx: &mut Context<Self>) {
-        let removed = self.starred_courses.remove(&name);
-        if !removed {
-            self.starred_courses.insert(name.clone());
+    pub(crate) fn is_course_starred(&self, key: &str, name: &str) -> bool {
+        self.starred_courses.contains(key)
+            || self.starred_courses.contains(name.trim())
+    }
+
+    pub(crate) fn toggle_star_course(
+        &mut self,
+        key: String,
+        name: String,
+        cx: &mut Context<Self>,
+    ) {
+        let was_starred = self.is_course_starred(&key, &name);
+        self.starred_courses.remove(&key);
+        self.starred_courses.remove(name.trim());
+        if !was_starred {
+            self.starred_courses.insert(key.clone());
         }
-        if self.favorite_selected.as_deref() == Some(name.as_str()) && removed {
+        if self.favorite_selected.as_deref() == Some(key.as_str()) && was_starred {
             self.favorite_selected = None;
         }
         self.config.starred_courses = self.starred_courses.iter().cloned().collect();
@@ -1009,13 +1173,16 @@ impl AppState {
 
     pub(crate) fn open_favorite_course(
         &mut self,
-        name: String,
+        key: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.tab = Tab::Courses;
-        let needs_shares = !self.shares.iter().any(|share| share.course_name == name);
-        self.favorite_selected = Some(name);
+        let needs_shares = !self
+            .shares
+            .iter()
+            .any(|share| share.course_key() == key);
+        self.favorite_selected = Some(key);
         self.favorite_scroll = UniformListScrollHandle::new();
         if needs_shares && !self.busy {
             self.refresh_shares(window, cx);
@@ -1053,10 +1220,10 @@ impl AppState {
         );
     }
 
-    pub(crate) fn favorite_replays_for(&self, name: &str) -> Vec<Replay> {
+    pub(crate) fn favorite_replays_for(&self, key: &str) -> Vec<Replay> {
         self.shares
             .iter()
-            .filter(|share| share.course_name == name)
+            .filter(|share| share.course_key() == key)
             .map(|share| {
                 let kind = media::classify_media_url(&share.m3u8_url).to_string();
                 let quality = media::score_vod_url(&share.m3u8_url);
@@ -1088,11 +1255,11 @@ impl AppState {
 
     pub(crate) fn download_favorite_all(
         &mut self,
-        name: &str,
+        key: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let replays = self.favorite_replays_for(name);
+        let replays = self.favorite_replays_for(key);
         self.download_many(replays, window, cx);
     }
 
@@ -1103,8 +1270,8 @@ impl AppState {
         cx.notify();
     }
 
-    pub(crate) fn select_plaza_course(&mut self, name: String, cx: &mut Context<Self>) {
-        self.plaza_selected_course = Some(name);
+    pub(crate) fn select_plaza_course(&mut self, key: String, cx: &mut Context<Self>) {
+        self.plaza_selected_course = Some(key);
         self.plaza_detail_scroll = UniformListScrollHandle::new();
         cx.notify();
     }

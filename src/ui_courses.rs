@@ -17,7 +17,7 @@ enum SidebarRow {
         collapsed: bool,
     },
     Enrolled(usize),
-    Favorite(String),
+    Favorite { key: String, name: String },
 }
 
 impl AppState {
@@ -30,8 +30,8 @@ impl AppState {
     }
 
     fn courses_view(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let right = if let Some(name) = &self.favorite_selected {
-            self.favorite_replay_list(name.clone(), cx).into_any_element()
+        let right = if let Some(key) = &self.favorite_selected {
+            self.favorite_replay_list(key.clone(), cx).into_any_element()
         } else {
             self.replay_list(window, cx).into_any_element()
         };
@@ -42,22 +42,34 @@ impl AppState {
             .child(right)
     }
 
-    fn favorite_courses(&self) -> Vec<(String, String)> {
-        let mut out: Vec<(String, String)> = Vec::new();
+    fn favorite_courses(&self) -> Vec<(String, String, String)> {
+        let mut out: Vec<(String, String, String)> = Vec::new();
         for share in &self.shares {
-            if self.starred_courses.contains(&share.course_name)
-                && !out.iter().any(|(name, _)| name == &share.course_name)
+            let key = share.course_key();
+            if self.is_course_starred(&key, &share.course_name)
+                && !out.iter().any(|(existing, _, _)| *existing == key)
             {
-                out.push((share.course_name.clone(), share.term.clone()));
+                out.push((key, share.course_name.clone(), share.term.clone()));
             }
         }
         for course in &self.courses {
-            if self.starred_courses.contains(&course.name)
-                && !out.iter().any(|(name, _)| name == &course.name)
+            let key = course.key();
+            if self.is_course_starred(&key, &course.name)
+                && !out.iter().any(|(existing, _, _)| *existing == key)
             {
-                out.push((course.name.clone(), course.term.clone()));
+                out.push((key, course.name.clone(), course.term.clone()));
             }
         }
+        // Legacy shares without course_id use name:<name>; prefer the enrolled
+        // course's id-keyed entry when both refer to the same course.
+        let id_keyed_names: Vec<String> = out
+            .iter()
+            .filter(|(key, _, _)| key.starts_with("id:"))
+            .map(|(_, name, _)| name.clone())
+            .collect();
+        out.retain(|(key, name, _)| {
+            !key.starts_with("name:") || !id_keyed_names.contains(name)
+        });
         out
     }
 
@@ -79,16 +91,17 @@ impl AppState {
                 }
             }
             SidebarSection::Favorites => {
-                for (name, term) in self.favorite_courses() {
+                for (key, name, term) in self.favorite_courses() {
                     let term = if term.trim().is_empty() {
                         "未知学期".to_string()
                     } else {
                         term
                     };
+                    let row = SidebarRow::Favorite { key, name };
                     if let Some((_, rows)) = groups.iter_mut().find(|(t, _)| *t == term) {
-                        rows.push(SidebarRow::Favorite(name));
+                        rows.push(row);
                     } else {
-                        groups.push((term, vec![SidebarRow::Favorite(name)]));
+                        groups.push((term, vec![row]));
                     }
                 }
             }
@@ -287,15 +300,16 @@ impl AppState {
                     }),
                 )
             }
-            SidebarRow::Favorite(name) => {
+            SidebarRow::Favorite { key, name } => {
+                let favorite_key = key.clone();
                 let favorite_name = name.clone();
-                let selected = self.favorite_selected.as_deref() == Some(name.as_str());
+                let selected = self.favorite_selected.as_deref() == Some(key.as_str());
                 self.course_row(
-                    ElementId::Name(format!("favorite-{name}").into()),
-                    name.clone(),
+                    ElementId::Name(format!("favorite-{key}").into()),
+                    favorite_name,
                     selected,
                     cx.listener(move |this, _, window, cx| {
-                        this.open_favorite_course(favorite_name.clone(), window, cx);
+                        this.open_favorite_course(favorite_key.clone(), window, cx);
                     }),
                 )
             }
@@ -338,23 +352,33 @@ impl AppState {
             .into_any_element()
     }
 
-    fn favorite_replay_list(&self, name: String, cx: &mut Context<Self>) -> impl IntoElement {
-        let replays = self.favorite_replays_for(&name);
+    fn favorite_replay_list(&self, key: String, cx: &mut Context<Self>) -> impl IntoElement {
+        let replays = self.favorite_replays_for(&key);
         let count = replays.len();
         let pending_count = replays
             .iter()
             .filter(|replay| !self.replay_downloaded(replay))
             .count();
+        let name = self
+            .shares
+            .iter()
+            .find(|share| share.course_key() == key)
+            .map(|share| share.course_name.clone())
+            .unwrap_or_else(|| {
+                key.trim_start_matches("id:")
+                    .trim_start_matches("name:")
+                    .to_string()
+            });
         let term = self
             .shares
             .iter()
-            .find(|share| share.course_name == name && !share.term.is_empty())
+            .find(|share| share.course_key() == key && !share.term.is_empty())
             .map(|share| share.term.clone())
             .unwrap_or_default();
         let teacher = self
             .shares
             .iter()
-            .find(|share| share.course_name == name && !share.teacher.is_empty())
+            .find(|share| share.course_key() == key && !share.teacher.is_empty())
             .map(|share| share.teacher.clone())
             .unwrap_or_default();
         let replays_for_list = replays.clone();
@@ -580,7 +604,7 @@ impl AppState {
                         .justify_center()
                         .gap_2()
                         .child(Spinner::new().small())
-                        .child(subtitle("正在加载回放…")),
+                        .child(subtitle(self.replays_loading_label.clone())),
                 )
             })
             .when(!self.replays_loading && self.replays.is_empty(), |this| {

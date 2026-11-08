@@ -20,6 +20,7 @@ pub const IAAA_BASE: &str = "https://iaaa.pku.edu.cn/iaaa";
 pub const IAAA_CAPTCHA_URL: &str = "https://iaaa.pku.edu.cn/iaaa/servlet/DrawServlet";
 pub const DEFAULT_CALLBACK: &str =
     "http://course.pku.edu.cn/webapps/bb-sso-BBLEARN/execute/authValidate/campusLogin";
+pub const PASSPORT_CALLBACK: &str = "https://passport.pku.edu.cn/";
 pub const PKU_DOMAIN: &str = "pku.edu.cn";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -60,9 +61,16 @@ struct Codes {
     otp: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoginTarget {
+    Blackboard,
+    Haoxue,
+}
+
 #[derive(Clone)]
 pub struct PendingLogin {
     http: Http,
+    target: LoginTarget,
     appid: String,
     redirect_url: String,
     username: String,
@@ -104,9 +112,86 @@ pub fn begin_login(
         ));
     }
 
-    let (appid, redirect_url, encrypted_password) = prepare_iaaa(&http, &page, password)?;
+    let (appid, redirect_url, encrypted_password) =
+        prepare_iaaa(&http, &page, password, DEFAULT_CALLBACK, false)?;
     let pending = PendingLogin {
         http,
+        target: LoginTarget::Blackboard,
+        appid,
+        redirect_url,
+        username: username.to_string(),
+        encrypted_password,
+        codes: Codes::default(),
+        challenge: LoginChallenge {
+            kind: VerificationKind::Captcha,
+            message: String::new(),
+        },
+    };
+    submit_pending(pending)
+}
+
+/// Start the passport/IAAA login used by the Haoxue course API. The same
+/// username/password is used as the teaching-network login, but the callback
+/// establishes `_token2`/`_token` instead of a Blackboard session.
+pub fn begin_haoxue_login(
+    username: &str,
+    password: &str,
+    cookie_path: impl Into<std::path::PathBuf>,
+) -> Result<LoginOutcome> {
+    let http = Http::new(cookie_path)?;
+    if crate::haoxue::session_valid(&http) {
+        crate::haoxue::normalize_cookies(&http);
+        return Ok(LoginOutcome::Success(http));
+    }
+
+    // Do not follow redirects here. When the teaching-network/IAAA session is
+    // already valid, passport answers this entry with a 302 that sets
+    // _token/_token2; following it bounces between "/" and the login page.
+    let response = http
+        .get_with_headers(crate::haoxue::LOGIN_ENTRY, &[])
+        .context("打开好学 passport 登录页")?;
+    let status = response.status().as_u16();
+    let location = response
+        .headers()
+        .get("location")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let body = response.text().context("读取好学 passport 登录页")?;
+    if crate::haoxue::session_valid(&http) {
+        crate::haoxue::normalize_cookies(&http);
+        let _ = http.save_cookies();
+        return Ok(LoginOutcome::Success(http));
+    }
+    if !body.contains("iaaa/oauth.jsp") {
+        return Ok(LoginOutcome::Failed(format!(
+            "好学 passport 返回 HTTP {status}{}，未建立好学会话，也没有 IAAA 登录表单。\
+             请确认教学网账号密码登录仍然有效。",
+            if location.is_empty() {
+                String::new()
+            } else {
+                format!("（Location: {location}）")
+            }
+        )));
+    }
+    let page = crate::http::Fetched {
+        status,
+        final_url: Url::parse(crate::haoxue::LOGIN_ENTRY)
+            .context("parse passport login URL")?,
+        body,
+    };
+    if username.trim().is_empty() || password.is_empty() {
+        return Ok(LoginOutcome::Failed(
+            "好学会话未建立，passport 需要 IAAA 账号密码登录。\
+             请使用学号密码登录教学网后重试。"
+                .to_string(),
+        ));
+    }
+    let (appid, redirect_url, encrypted_password) =
+        prepare_iaaa(&http, &page, password, PASSPORT_CALLBACK, true)?;
+    let pending = PendingLogin {
+        http,
+        target: LoginTarget::Haoxue,
         appid,
         redirect_url,
         username: username.to_string(),
@@ -251,6 +336,8 @@ fn prepare_iaaa(
     http: &Http,
     page: &crate::http::Fetched,
     password: &str,
+    default_redirect: &str,
+    force_oauth: bool,
 ) -> Result<(String, String, String)> {
     let hidden = hidden_inputs(&page.body);
     let mut appid = get_ci(&hidden, "appID")
@@ -261,12 +348,12 @@ fn prepare_iaaa(
     let mut redirect_url = get_ci(&hidden, "redirectUrl")
         .or_else(|| get_ci(&hidden, "redirUrl"))
         .or_else(|| js_hidden_value(&page.body, "redirectUrl"))
-        .unwrap_or_else(|| DEFAULT_CALLBACK.to_string());
+        .unwrap_or_else(|| default_redirect.to_string());
     let app_name = get_ci(&hidden, "appName")
         .or_else(|| js_hidden_value(&page.body, "appName"))
         .unwrap_or_else(|| "1".to_string());
 
-    if page.body.contains("iaaa/oauth.jsp") {
+    if force_oauth || page.body.contains("iaaa/oauth.jsp") {
         let response = http
             .post_form(
                 &format!("{IAAA_BASE}/oauth.jsp"),
@@ -298,7 +385,7 @@ fn prepare_iaaa(
         appid = "blackboard".to_string();
     }
     if redirect_url.is_empty() {
-        redirect_url = DEFAULT_CALLBACK.to_string();
+        redirect_url = default_redirect.to_string();
     }
     let encrypted_password = rsa_encrypt_password(http, password)?;
     Ok((appid, redirect_url, encrypted_password))
@@ -347,10 +434,38 @@ fn submit_pending(mut pending: PendingLogin) -> Result<LoginOutcome> {
                 "IAAA 返回成功但没有 token".to_string(),
             ));
         };
-        let target = json_string(&body, "redirectUrl")
+        let redirect_target = json_string(&body, "redirectUrl")
             .or_else(|| json_string(&body, "redirUrl"))
             .unwrap_or_else(|| pending.redirect_url.clone());
-        let callback = match append_token(&target, &token) {
+        if pending.target == LoginTarget::Haoxue {
+            // The reference implementation deliberately does not follow this
+            // redirect: passport sets _token/_token2 on the 302 response, and
+            // following it can bounce between "/" and the login page.
+            let callback = match append_token(PASSPORT_CALLBACK, &token) {
+                Ok(url) => match pending.http.get_with_headers(
+                    url.as_str(),
+                    &[("Referer", "https://iaaa.pku.edu.cn/iaaa/oauth.jsp")],
+                ) {
+                    Ok(response) => format!(
+                        "HTTP {}",
+                        response.status().as_u16()
+                    ),
+                    Err(error) => format!("{error:#}"),
+                },
+                Err(error) => format!("invalid callback target: {error:#}"),
+            };
+            if crate::haoxue::session_valid(&pending.http) {
+                crate::haoxue::normalize_cookies(&pending.http);
+                let _ = pending.http.save_cookies();
+                return Ok(LoginOutcome::Success(pending.http));
+            }
+            return Ok(LoginOutcome::Failed(format!(
+                "IAAA 登录成功，但 passport 回调未建立好学会话（{callback}）。\
+                 请重试；若仍失败，可改用 Cookie 导入。"
+            )));
+        }
+
+        let callback = match append_token(&redirect_target, &token) {
             Ok(url) => match pending.http.get_follow_with_headers(
                 url.as_str(),
                 &[("Referer", "https://iaaa.pku.edu.cn/iaaa/oauth.jsp")],
@@ -661,9 +776,30 @@ mod tests {
         assert!(sso.is_success());
         assert!(sso.body.contains("iaaa/oauth.jsp"));
         let (appid, redirect, encrypted) =
-            prepare_iaaa(&http, &sso, "dummy-password").unwrap();
+            prepare_iaaa(&http, &sso, "dummy-password", DEFAULT_CALLBACK, false).unwrap();
         assert_eq!(appid, "blackboard");
         assert!(redirect.contains("campusLogin"));
+        assert!(!encrypted.is_empty());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    #[ignore]
+    fn live_passport_entry_prepares_iaaa_login() {
+        let path = std::env::temp_dir().join(format!(
+            "course-share-passport-test-{}.json",
+            std::process::id()
+        ));
+        let http = Http::new(&path).unwrap();
+        let page = http
+            .get_follow(crate::haoxue::LOGIN_ENTRY, 15)
+            .unwrap();
+        assert!(page.is_success());
+        assert!(page.body.contains("iaaa/oauth.jsp"));
+        let (appid, redirect, encrypted) =
+            prepare_iaaa(&http, &page, "dummy-password", PASSPORT_CALLBACK, true).unwrap();
+        assert_eq!(appid, "resource");
+        assert!(redirect.contains("passport.pku.edu.cn"));
         assert!(!encrypted.is_empty());
         let _ = std::fs::remove_file(path);
     }

@@ -61,6 +61,29 @@ impl CookieJar {
         self.records.len()
     }
 
+    pub fn value(&self, name: &str) -> Option<String> {
+        self.records
+            .iter()
+            .rev()
+            .find(|cookie| cookie.name == name && !cookie.value.is_empty())
+            .map(|cookie| cookie.value.clone())
+    }
+
+    /// Replace every cookie with this name by one shared-domain record. Used for
+    /// Haoxue tokens that must also be sent to `resourcese.pku.edu.cn`.
+    pub fn set_shared(&mut self, name: &str, value: &str, domain: &str) {
+        self.records.retain(|cookie| cookie.name != name);
+        self.records.push(CookieRecord {
+            name: name.to_string(),
+            value: value.to_string(),
+            domain: domain.trim_start_matches('.').to_ascii_lowercase(),
+            path: "/".to_string(),
+            secure: true,
+            host_only: false,
+            expires: None,
+        });
+    }
+
     pub fn clear(&mut self) {
         self.records.clear();
     }

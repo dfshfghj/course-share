@@ -1185,6 +1185,7 @@ dependencies = [
  "dirs 5.0.1",
  "gpui-component",
  "gpui-kit",
+ "md-5",
  "rand 0.8.8",
  "regex",
  "reqwest",

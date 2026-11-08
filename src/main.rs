@@ -7,6 +7,7 @@ mod config;
 mod cookies;
 mod download;
 mod ffmpeg;
+mod haoxue;
 mod http;
 mod media;
 mod onlineroomse;

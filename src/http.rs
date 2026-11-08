@@ -68,6 +68,16 @@ impl Http {
         self.jar.lock().map(|j| j.count()).unwrap_or(0)
     }
 
+    pub fn cookie_value(&self, name: &str) -> Option<String> {
+        self.jar.lock().ok().and_then(|jar| jar.value(name))
+    }
+
+    pub fn set_shared_cookie(&self, name: &str, value: &str, domain: &str) -> Result<()> {
+        let mut jar = self.jar.lock().map_err(|_| anyhow!("cookie store poisoned"))?;
+        jar.set_shared(name, value, domain);
+        jar.save(&self.cookie_path)
+    }
+
     pub fn import_cookie_header(&self, header: &str, domain: &str) -> Result<()> {
         let mut jar = self.jar.lock().map_err(|_| anyhow!("cookie store poisoned"))?;
         jar.import_header(header, domain);

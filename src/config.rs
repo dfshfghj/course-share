@@ -95,6 +95,46 @@ impl AppConfig {
     }
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Credentials {
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub password: String,
+}
+
+impl Credentials {
+    pub fn path() -> PathBuf {
+        AppConfig::data_dir().join("credentials.json")
+    }
+
+    pub fn load() -> Self {
+        fs::read_to_string(Self::path())
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self) -> Result<()> {
+        let path = Self::path();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+        }
+        let data = serde_json::to_vec_pretty(self)?;
+        fs::write(&path, data).with_context(|| format!("write {}", path.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+        }
+        Ok(())
+    }
+
+    pub fn clear() {
+        let _ = fs::remove_file(Self::path());
+    }
+}
+
 fn shellexpand_home(value: &str) -> String {
     if let Some(rest) = value
         .strip_prefix("~/")

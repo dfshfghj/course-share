@@ -412,5 +412,17 @@ impl Render for AppState {
             .when(self.downloading || self.error.is_some(), |this| {
                 this.child(self.footer())
             })
+            .when(logged_in && self.pending_login.is_some(), |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .bg(rgb(BG))
+                        .child(self.login_view(cx)),
+                )
+            })
     }
 }

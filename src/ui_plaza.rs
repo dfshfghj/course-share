@@ -9,6 +9,7 @@ use gpui_kit::{
 };
 
 struct PlazaCourse {
+    key: String,
     name: String,
     term: String,
     teacher: String,
@@ -19,13 +20,11 @@ impl AppState {
     fn share_groups(&self) -> Vec<(String, Vec<Share>)> {
         let mut groups: Vec<(String, Vec<Share>)> = Vec::new();
         for share in &self.shares {
-            if let Some((_, items)) = groups
-                .iter_mut()
-                .find(|(name, _)| *name == share.course_name)
-            {
+            let key = share.course_key();
+            if let Some((_, items)) = groups.iter_mut().find(|(existing, _)| *existing == key) {
                 items.push(share.clone());
             } else {
-                groups.push((share.course_name.clone(), vec![share.clone()]));
+                groups.push((key, vec![share.clone()]));
             }
         }
         groups
@@ -34,7 +33,11 @@ impl AppState {
     fn plaza_course_groups(&self) -> Vec<PlazaCourse> {
         self.share_groups()
             .into_iter()
-            .map(|(name, shares)| {
+            .map(|(key, shares)| {
+                let name = shares
+                    .first()
+                    .map(|share| share.course_name.clone())
+                    .unwrap_or_default();
                 let term = shares
                     .iter()
                     .find(|share| !share.term.is_empty())
@@ -46,6 +49,7 @@ impl AppState {
                     .map(|share| share.teacher.clone())
                     .unwrap_or_default();
                 PlazaCourse {
+                    key,
                     name,
                     term,
                     teacher,
@@ -64,7 +68,7 @@ impl AppState {
         let selected = self
             .plaza_selected_course
             .as_ref()
-            .and_then(|name| courses.iter().find(|course| &course.name == name));
+            .and_then(|key| courses.iter().find(|course| &course.key == key));
         if let Some(course) = selected {
             self.plaza_detail(course, cx).into_any_element()
         } else {
@@ -75,10 +79,11 @@ impl AppState {
     fn plaza_grid(&self, courses: Vec<PlazaCourse>, cx: &mut Context<Self>) -> impl IntoElement {
         let mut cards = Vec::new();
         for (index, course) in courses.iter().enumerate() {
-            let starred = self.starred_courses.contains(&course.name);
+            let starred = self.is_course_starred(&course.key, &course.name);
             let star_label = if starred { "★" } else { "☆" };
+            let key_for_star = course.key.clone();
             let name_for_star = course.name.clone();
-            let name_for_open = course.name.clone();
+            let key_for_open = course.key.clone();
             let mut meta = Vec::new();
             if !course.term.is_empty() {
                 meta.push(course.term.clone());
@@ -118,7 +123,11 @@ impl AppState {
                             .label(star_label)
                             .ghost()
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.toggle_star_course(name_for_star.clone(), cx);
+                                this.toggle_star_course(
+                                    key_for_star.clone(),
+                                    name_for_star.clone(),
+                                    cx,
+                                );
                             })),
                         ),
                 );
@@ -134,7 +143,7 @@ impl AppState {
                     .label("查看回放")
                     .primary()
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.select_plaza_course(name_for_open.clone(), cx);
+                        this.select_plaza_course(key_for_open.clone(), cx);
                     })),
                 ),
             );
@@ -229,8 +238,9 @@ impl AppState {
         .min_h_0()
         .track_scroll(&self.plaza_detail_scroll);
 
-        let starred = self.starred_courses.contains(&course.name);
+        let starred = self.is_course_starred(&course.key, &course.name);
         let star_label = if starred { "★" } else { "☆" };
+        let key_for_star = course.key.clone();
         let name_for_star = course.name.clone();
         div()
             .size_full()
@@ -271,7 +281,11 @@ impl AppState {
                             .label(star_label)
                             .ghost()
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.toggle_star_course(name_for_star.clone(), cx);
+                                this.toggle_star_course(
+                                    key_for_star.clone(),
+                                    name_for_star.clone(),
+                                    cx,
+                                );
                             })),
                     ),
             )
