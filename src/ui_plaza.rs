@@ -1,8 +1,7 @@
 use crate::app::AppState;
-use crate::share::Share;
 use crate::smooth_scroll::{SmoothTarget, SmoothWheel};
 use crate::theme::tone;
-use crate::ui::{subtitle, title, BORDER, MUTED, PANEL, PRIMARY};
+use crate::ui::{subtitle, title, BORDER, PANEL, PRIMARY};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::IconName;
 use gpui_component::spinner::Spinner;
@@ -10,19 +9,24 @@ use gpui_component::Disableable as _;
 use gpui_component::Sizable as _;
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    div, px, uniform_list, AnyElement, Context, ElementId, FontWeight, IntoElement, Window,
+    div, px, AnyElement, Context, ElementId, FontWeight, IntoElement, Window,
 };
 use std::rc::Rc;
 
 impl AppState {
     pub(crate) fn plaza_view(
-        &self,
+        &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        if let Some(key) = self.plaza_selected_course.as_ref() {
-            if let Some(course) = self.plaza_courses.iter().find(|course| &course.key == key) {
-                return self.plaza_detail(course, cx).into_any_element();
+        if let Some(key) = self.plaza_selected_course.clone() {
+            if let Some(course) = self
+                .plaza_courses
+                .iter()
+                .find(|course| course.key == key)
+                .cloned()
+            {
+                return self.plaza_detail(&course, window, cx).into_any_element();
             }
         }
         self.plaza_grid(window, cx).into_any_element()
@@ -146,6 +150,7 @@ impl AppState {
                         this.load_more_plaza(cx);
                     }
                 });
+                true
             }),
         )
         .into_any_element();
@@ -291,31 +296,15 @@ impl AppState {
     }
 
     fn plaza_detail(
-        &self,
+        &mut self,
         course: &crate::share::CourseGroup,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let count = self.plaza_shares.len();
-        let shares_for_list = self.plaza_shares.clone();
-        let view = cx.entity().downgrade();
-        let list = uniform_list("plaza-replay-list", count, move |range, _, cx| {
-            let shares = shares_for_list.clone();
-            view.update(cx, |this, cx| {
-                range
-                    .map(|index| this.plaza_replay_row(&shares[index], index, cx))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default()
-        })
-        .flex_1()
-        .min_h_0()
-        .track_scroll(&self.plaza_detail_scroll);
-        let viewport = self.smooth_viewport(
-            "plaza-detail",
-            SmoothTarget::uniform(&self.plaza_detail_scroll),
-            list,
-            cx,
-        );
+        let shares = self.plaza_shares.clone();
+        let table = self.ensure_plaza_table(window, &shares, cx);
+        let table_view = crate::replay_table::plaza_table_element(&table, cx);
 
         let starred = self.is_course_starred(&course.key, &course.course_name);
         let star_label = if starred { "★" } else { "☆" };
@@ -381,11 +370,7 @@ impl AppState {
                     .flex_1()
                     .min_h_0()
                     .overflow_hidden()
-                    .child(viewport)
-                    .child(crate::ui_scroll::uniform_rail(
-                        "plaza-detail-scrollbar",
-                        &self.plaza_detail_scroll,
-                    )),
+                    .child(table_view),
             )
             .when(self.plaza_detail_loading && count == 0, |this| {
                 this.child(
@@ -411,93 +396,6 @@ impl AppState {
                         .child(subtitle("该课程暂时没有可下载的回放。")),
                 )
             })
-    }
-
-    fn plaza_replay_row(
-        &self,
-        share: &Share,
-        index: usize,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let share_for_download = share.clone();
-        let share_for_preview = share.clone();
-        let url_for_copy = share.m3u8_url.clone();
-        let time = if !share.record_time.trim().is_empty() {
-            share.record_time.clone()
-        } else if !share.record_date.trim().is_empty() {
-            share.record_date.clone()
-        } else {
-            "—".to_string()
-        };
-        div()
-            .h(px(56.0))
-            .w_full()
-            .flex_none()
-            .px_5()
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap_4()
-            .border_b_1()
-            .border_color(tone(BORDER))
-            .hover(|style| style.bg(tone(0xf8fafc)))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .child(share.replay_title.clone()),
-            )
-            .child(
-                div()
-                    .w(px(170.0))
-                    .flex_none()
-                    .text_sm()
-                    .text_color(tone(MUTED))
-                    .truncate()
-                    .child(time),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(subtitle(format!("下载 {}", share.downloads)))
-                    .child(
-                        Button::new(ElementId::Name(
-                            format!("plaza-preview-{index}").into(),
-                        ))
-                        .label("预览")
-                        .ghost()
-                        .disabled(share.m3u8_url.is_empty())
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.preview_share(share_for_preview.clone(), cx);
-                        })),
-                    )
-                    .child(
-                        Button::new(ElementId::Name(
-                            format!("plaza-download-{index}").into(),
-                        ))
-                        .label("下载")
-                        .primary()
-                        .disabled(share.m3u8_url.is_empty())
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.download_share(share_for_download.clone(), window, cx);
-                        })),
-                    )
-                    .child(
-                        Button::new(ElementId::Name(
-                            format!("plaza-copy-{index}").into(),
-                        ))
-                        .label("复制链接")
-                        .ghost()
-                        .disabled(url_for_copy.is_empty())
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.copy_text(url_for_copy.clone(), cx);
-                        })),
-                    ),
-            )
-            .into_any_element()
     }
 }
 

@@ -30,7 +30,7 @@ impl Course {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Replay {
     pub course_id: String,
     pub course_name: String,
@@ -41,6 +41,30 @@ pub struct Replay {
     pub page_url: String,
     pub media: Vec<MediaCandidate>,
     pub guid: String,
+    #[serde(default)]
+    pub room: String,
+    #[serde(default)]
+    pub term: String,
+    #[serde(default)]
+    pub kcwybm: String,
+    #[serde(default)]
+    pub kcdm: String,
+    #[serde(default)]
+    pub college: String,
+    #[serde(default)]
+    pub start_at: String,
+    #[serde(default)]
+    pub end_at: String,
+    #[serde(default)]
+    pub duration_secs: i64,
+    #[serde(default)]
+    pub file_size: i64,
+    #[serde(default)]
+    pub resource_id: String,
+    #[serde(default)]
+    pub sub_status: String,
+    #[serde(default)]
+    pub playback_status: String,
 }
 
 impl Replay {
@@ -370,6 +394,7 @@ pub fn list_replays(http: &Http, course: &Course) -> Result<Vec<Replay>> {
                 page_url: room.launch_url.clone(),
                 media: Vec::new(),
                 guid: String::new(),
+                ..Default::default()
             });
         }
     }
@@ -542,6 +567,7 @@ fn merges_play_entries(replays: &mut Vec<Replay>, play_entries: &[PlayEntry], co
             page_url: entry.play_url.clone(),
             media: Vec::new(),
             guid: String::new(),
+            ..Default::default()
         });
     }
 }
@@ -747,6 +773,7 @@ mod tests {
             page_url: String::new(),
             media: Vec::new(),
             guid: String::new(),
+            ..Default::default()
         }
     }
 

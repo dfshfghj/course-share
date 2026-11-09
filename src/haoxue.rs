@@ -89,15 +89,16 @@ pub fn list_replays(http: &Http, course: &Course) -> Result<Vec<Replay>> {
             if empty_shell { 0 } else { 1 },
             subjects.len(),
         );
-        ranked.push((rank, course_id, subjects));
+        ranked.push((rank, course_id, subjects, course_meta(&item)));
     }
     ranked.sort_by(|a, b| b.0.cmp(&a.0));
 
     // Several Haoxue course records can share the same name. Prefer records
     // whose visible lessons already have media, then try the rest.
-    for (_, course_id, subjects) in ranked {
-        let replays = collect_course_replays(http, &token, &course_id, course, &subjects);
+    for (_, course_id, subjects, meta) in ranked {
+        let mut replays = collect_course_replays(http, &token, &course_id, course, &subjects);
         if !replays.is_empty() {
+            apply_course_meta(&mut replays, &meta);
             return Ok(replays);
         }
     }
@@ -125,14 +126,12 @@ fn collect_course_replays(
         if let Ok(id) = sub_id.parse::<i64>() {
             visible_ids.push(id);
         }
-        let value = if media_candidates(subject).is_empty() {
-            match fetch_sub_detail(http, token, course_id, &sub_id) {
-                Ok(value) => value,
-                Err(_) => continue,
-            }
-        } else {
-            subject.clone()
+        let mut value = match fetch_sub_detail(http, token, course_id, &sub_id) {
+            Ok(value) if value.get("sub_id").is_some() || value.get("title").is_some() => value,
+            _ if !media_candidates(subject).is_empty() => subject.clone(),
+            _ => continue,
         };
+        merge_subject_metadata(&mut value, subject);
         if detail_belongs(&value, wanted_id, wanted) {
             details.insert(sub_id, value);
         }
@@ -199,6 +198,120 @@ fn detail_belongs(detail: &Value, course_id: &str, name: &str) -> bool {
         return false;
     }
     true
+}
+
+#[derive(Clone, Default)]
+struct CourseMeta {
+    term: String,
+    kcwybm: String,
+    kcdm: String,
+    college: String,
+}
+
+fn course_meta(item: &Value) -> CourseMeta {
+    let info = item
+        .get("information")
+        .and_then(|value| value.as_str())
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        .unwrap_or(Value::Null);
+    CourseMeta {
+        term: value_string(item, &["course_term", "term_name"]),
+        kcwybm: value_string(&info, &["kcwybm"]),
+        kcdm: value_string(&info, &["kcdm"]),
+        college: value_string(item, &["course_college"]),
+    }
+}
+
+fn apply_course_meta(replays: &mut [Replay], meta: &CourseMeta) {
+    for replay in replays {
+        if replay.term.is_empty() {
+            replay.term = meta.term.clone();
+        }
+        if replay.kcwybm.is_empty() {
+            replay.kcwybm = meta.kcwybm.clone();
+        }
+        if replay.kcdm.is_empty() {
+            replay.kcdm = meta.kcdm.clone();
+        }
+        if replay.college.is_empty() {
+            replay.college = meta.college.clone();
+        }
+    }
+}
+
+fn value_i64(value: &Value, keys: &[&str]) -> i64 {
+    for key in keys {
+        let mut found = Some(value);
+        for part in key.split('.') {
+            found = found.and_then(|current| current.get(part));
+        }
+        let Some(found) = found else {
+            continue;
+        };
+        if let Some(number) = found.as_i64() {
+            return number;
+        }
+        if let Some(text) = found.as_str() {
+            if let Ok(number) = text.trim().parse::<i64>() {
+                return number;
+            }
+            if let Ok(number) = text.trim().parse::<f64>() {
+                return number as i64;
+            }
+        }
+    }
+    0
+}
+
+fn detail_sub_content(detail: &Value) -> Value {
+    match detail.get("sub_content") {
+        Some(Value::String(text)) => serde_json::from_str::<Value>(text).unwrap_or(Value::Null),
+        Some(value) => value.clone(),
+        None => Value::Null,
+    }
+}
+
+fn merge_subject_metadata(detail: &mut Value, subject: &Value) {
+    let Some(target) = detail.as_object_mut() else {
+        return;
+    };
+    for key in [
+        "class_begin",
+        "class_over",
+        "sub_status",
+        "sub_duration",
+        "lecturer_name",
+        "lecturer",
+    ] {
+        let missing = target
+            .get(key)
+            .map(|value| {
+                value.is_null()
+                    || value
+                        .as_str()
+                        .map(|text| text.trim().is_empty())
+                        .unwrap_or(false)
+            })
+            .unwrap_or(true);
+        if missing {
+            if let Some(value) = subject.get(key) {
+                target.insert(key.to_string(), value.clone());
+            }
+        }
+    }
+}
+
+fn detail_room(detail: &Value) -> String {
+    let sub_content = detail_sub_content(detail);
+    for value in [
+        value_string(&sub_content, &["address", "room_name", "room"]),
+        value_string(detail, &["room_name", "address", "room"]),
+    ] {
+        if !value.trim().is_empty() {
+            return value;
+        }
+    }
+    String::new()
 }
 
 fn replays_from_details(course: &Course, details: &HashMap<String, Value>) -> Vec<Replay> {
@@ -341,13 +454,36 @@ fn replay_from_detail(
             .map(|candidate| candidate.guid.clone())
             .unwrap_or_default();
     }
-    let mut record_time = format_timestamp(&value_string(
+    let start_at = format_timestamp(&value_string(
         detail,
-        &["class_begin", "start_at", "record_time"],
+        &["class_begin", "start_at", "course_begin"],
     ));
-    if record_time.is_empty() {
-        record_time = date_from_title(&title);
-    }
+    let end_at = format_timestamp(&value_string(
+        detail,
+        &["class_over", "end_at", "course_over"],
+    ));
+    let record_time = if start_at.is_empty() {
+        date_from_title(&title)
+    } else {
+        start_at.clone()
+    };
+    let sub_content = detail_sub_content(detail);
+    let duration_ms = value_i64(
+        &sub_content,
+        &["save_playback.contents_duration", "contents_duration", "duration"],
+    );
+    let duration_secs = if duration_ms > 0 {
+        duration_ms / 1000
+    } else {
+        value_i64(detail, &["sub_duration", "duration"]).max(0)
+    };
+    let file_size = detail
+        .get("videoArr")
+        .and_then(|value| value.as_array())
+        .and_then(|items| items.first())
+        .map(|item| value_i64(item, &["file_size"]))
+        .unwrap_or(0);
+    let playback_status = value_string(&sub_content, &["playback_status"]);
     Some(Replay {
         course_id: course.id.clone(),
         course_name: course.name.clone(),
@@ -358,6 +494,15 @@ fn replay_from_detail(
         page_url: String::new(),
         media,
         guid,
+        room: detail_room(detail),
+        start_at,
+        end_at,
+        duration_secs,
+        file_size,
+        resource_id: value_string(detail, &["resource_id"]),
+        sub_status: value_string(detail, &["sub_status"]),
+        playback_status,
+        ..Default::default()
     })
 }
 
@@ -645,5 +790,31 @@ mod tests {
             "sub_content": {"save_playback": {"is_m3u8": "no"}}
         });
         assert!(replay_from_detail(&course, &detail, "900002").is_none());
+    }
+
+    #[test]
+    fn extracts_rich_course_meta() {
+        let item = serde_json::json!({
+            "course_term": "26-27学年第1学期",
+            "course_college": "物理学院",
+            "information": "{\"kkxn\":\"26-27\",\"kkxq\":\"1\",\"kcwybm\":\"26271-00004\",\"kcdm\":\"00432297\"}"
+        });
+        let meta = course_meta(&item);
+        assert_eq!(meta.term, "26-27学年第1学期");
+        assert_eq!(meta.college, "物理学院");
+        assert_eq!(meta.kcwybm, "26271-00004");
+        assert_eq!(meta.kcdm, "00432297");
+    }
+
+    #[test]
+    fn extracts_room_from_sub_content_address() {
+        let detail = serde_json::json!({
+            "sub_content": {"address": "北京大学本部理教-307"}
+        });
+        assert_eq!(detail_room(&detail), "北京大学本部理教-307");
+        let detail = serde_json::json!({
+            "sub_content": "{\"address\":\"北京大学本部理教-211\"}"
+        });
+        assert_eq!(detail_room(&detail), "北京大学本部理教-211");
     }
 }

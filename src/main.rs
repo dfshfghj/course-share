@@ -13,6 +13,7 @@ mod http;
 mod media;
 mod onlineroomse;
 mod preview;
+mod replay_table;
 mod share;
 mod smooth_scroll;
 mod theme;

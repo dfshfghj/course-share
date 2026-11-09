@@ -27,6 +27,32 @@ pub struct Share {
     #[serde(default)]
     pub record_time: String,
     #[serde(default)]
+    pub room: String,
+    #[serde(default)]
+    pub kcwybm: String,
+    #[serde(default)]
+    pub kcdm: String,
+    #[serde(default)]
+    pub college: String,
+    #[serde(default)]
+    pub start_at: String,
+    #[serde(default)]
+    pub end_at: String,
+    #[serde(default)]
+    pub duration_secs: i64,
+    #[serde(default)]
+    pub file_size: i64,
+    #[serde(default)]
+    pub resource_id: String,
+    #[serde(default)]
+    pub sub_status: String,
+    #[serde(default)]
+    pub playback_status: String,
+    #[serde(default)]
+    pub mp4_url: String,
+    #[serde(default)]
+    pub media: Vec<ShareMedia>,
+    #[serde(default)]
     pub uploader: String,
     #[serde(default)]
     pub note: String,
@@ -78,9 +104,44 @@ impl Share {
             } else {
                 replay.lecturer.clone()
             },
-            term: course.term.clone(),
+            term: if replay.term.trim().is_empty() {
+                course.term.clone()
+            } else {
+                replay.term.clone()
+            },
             record_date: record_date_from_url(&candidate.url),
             record_time: replay.record_time.clone(),
+            room: replay.room.clone(),
+            kcwybm: replay.kcwybm.clone(),
+            kcdm: replay.kcdm.clone(),
+            college: replay.college.clone(),
+            start_at: replay.start_at.clone(),
+            end_at: replay.end_at.clone(),
+            duration_secs: replay.duration_secs,
+            file_size: replay.file_size,
+            resource_id: replay.resource_id.clone(),
+            sub_status: replay.sub_status.clone(),
+            playback_status: replay.playback_status.clone(),
+            mp4_url: replay
+                .media
+                .iter()
+                .find(|candidate| {
+                    candidate.kind == "file"
+                        && candidate.url.contains("resourcese.pku.edu.cn")
+                })
+                .map(|candidate| candidate.url.clone())
+                .unwrap_or_default(),
+            media: replay
+                .media
+                .iter()
+                .filter(|candidate| candidate.url.contains("resourcese.pku.edu.cn"))
+                .map(|candidate| ShareMedia {
+                    url: candidate.url.clone(),
+                    kind: candidate.kind.clone(),
+                    quality: candidate.quality,
+                    guid: candidate.guid.clone(),
+                })
+                .collect(),
             uploader: uploader.to_string(),
             ..Default::default()
         })
@@ -100,6 +161,18 @@ fn record_date_from_url(url: &str) -> String {
         }
     }
     String::new()
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ShareMedia {
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub quality: i32,
+    #[serde(default)]
+    pub guid: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -349,6 +422,7 @@ mod tests {
                 guid: "0123456789abcdef0123456789abcdef".to_string(),
             }],
             guid: "0123456789abcdef0123456789abcdef".to_string(),
+            ..Default::default()
         };
         let share = Share::from_replay(&course, &replay, "tester").unwrap();
         assert_eq!(share.guid, replay.guid);
@@ -382,6 +456,7 @@ mod tests {
                 guid: String::new(),
             }],
             guid: String::new(),
+            ..Default::default()
         };
         let share = Share::from_replay(&course, &replay, "tester").unwrap();
         assert_eq!(share.guid, "FEDCBA9876543210FEDCBA9876543210");

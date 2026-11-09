@@ -10,13 +10,13 @@ use std::time::Duration;
 
 pub(crate) struct SmoothWheel<E: Element> {
     child: E,
-    on_wheel: Rc<dyn Fn(&ScrollWheelEvent, &mut Window, &mut App)>,
+    on_wheel: Rc<dyn Fn(&ScrollWheelEvent, &mut Window, &mut App) -> bool>,
 }
 
 impl<E: Element> SmoothWheel<E> {
     pub(crate) fn new(
         child: E,
-        on_wheel: Rc<dyn Fn(&ScrollWheelEvent, &mut Window, &mut App)>,
+        on_wheel: Rc<dyn Fn(&ScrollWheelEvent, &mut Window, &mut App) -> bool>,
     ) -> Self {
         Self { child, on_wheel }
     }
@@ -91,9 +91,10 @@ impl<E: Element> Element for SmoothWheel<E> {
         let on_wheel = self.on_wheel.clone();
         window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
             if phase == DispatchPhase::Capture && hitbox.should_handle_scroll(window) {
-                on_wheel(event, window, cx);
-                cx.stop_propagation();
-                window.prevent_default();
+                if on_wheel(event, window, cx) {
+                    cx.stop_propagation();
+                    window.prevent_default();
+                }
             }
         });
     }
@@ -156,6 +157,7 @@ impl AppState {
             on_wheel: Rc::new(move |event, _, cx| {
                 let target = target.clone();
                 view.update(cx, |this, cx| this.smooth_wheel(id, target, event, cx));
+                true
             }),
         }
         .into_any_element()

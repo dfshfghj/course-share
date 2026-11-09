@@ -325,12 +325,81 @@ pub fn resolve_via_player(http: &Http, replay: &mut Replay) -> Result<()> {
         replay.lecturer = value_string(item, &["teacher_name", "lecturer_name", "lecturer"]);
     }
     if replay.record_time.is_empty() {
-        replay.record_time = value_string(item, &["course_begin", "start_at", "record_time"]);
+        replay.record_time = format_timestamp_value(&value_string(
+            item,
+            &["course_begin", "start_at", "record_time"],
+        ));
     }
     if replay.sub_title.is_empty() {
-        replay.sub_title = value_string(item, &["title"]);
+        replay.sub_title = value_string(item, &["sub_title", "title"]);
+    }
+    if replay.room.is_empty() {
+        replay.room = value_string(item, &["room_name", "room"]);
+    }
+    if let Some(term) = rich_term(item) {
+        replay.term = term;
+    }
+    if replay.kcwybm.is_empty() {
+        replay.kcwybm = rich_field(item, "kcwybm");
+    }
+    if replay.kcdm.is_empty() {
+        replay.kcdm = rich_field(item, "kcdm");
+    }
+    if replay.college.is_empty() {
+        replay.college = value_string(item, &["structure_name", "course_college", "college"]);
     }
     Ok(())
+}
+
+fn rich_information(item: &Value) -> Value {
+    item.get("information")
+        .and_then(|value| value.as_str())
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        .unwrap_or(Value::Null)
+}
+
+fn rich_field(item: &Value, key: &str) -> String {
+    let direct = value_string(item, &[key]);
+    if !direct.is_empty() {
+        return direct;
+    }
+    value_string(&rich_information(item), &[key])
+}
+
+fn rich_term(item: &Value) -> Option<String> {
+    let info = rich_information(item);
+    let year = value_string(&info, &["kkxn"]);
+    let semester = value_string(&info, &["kkxq"]);
+    if !year.is_empty() && !semester.is_empty() {
+        return Some(format!("{year}学年第{semester}学期"));
+    }
+    non_empty(value_string(item, &["course_term", "term_name"]))
+}
+
+fn non_empty(value: String) -> Option<String> {
+    (!value.trim().is_empty()).then_some(value)
+}
+
+pub(crate) fn format_timestamp_value(value: &str) -> String {
+    let value = value.trim();
+    if value.is_empty() || !value.chars().all(|ch| ch.is_ascii_digit()) {
+        return value.to_string();
+    }
+    let Ok(mut seconds) = value.parse::<i64>() else {
+        return value.to_string();
+    };
+    if seconds > 10_000_000_000 {
+        seconds /= 1000;
+    }
+    let Some(time) = chrono::DateTime::from_timestamp(seconds, 0) else {
+        return value.to_string();
+    };
+    let Some(offset) = chrono::FixedOffset::east_opt(8 * 3600) else {
+        return value.to_string();
+    };
+    time.with_timezone(&offset)
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string()
 }
 
 fn extract_casapi_url(html: &str) -> Option<String> {
@@ -379,7 +448,10 @@ pub fn parse_list(value: &Value, course: &Course) -> Vec<Replay> {
             continue;
         }
         let lecturer = value_string(&item, &["lecturer_name", "lecturer", "teacher"]);
-        let record_time = value_string(&item, &["record_time", "recordTime", "class_begin"]);
+        let record_time = format_timestamp_value(&value_string(
+            &item,
+            &["record_time", "recordTime", "class_begin", "course_begin"],
+        ));
         let sub_content = item
             .get("sub_content")
             .map(|value| match value {
@@ -407,6 +479,7 @@ pub fn parse_list(value: &Value, course: &Course) -> Vec<Replay> {
             page_url: String::new(),
             media,
             guid,
+            ..Default::default()
         });
     }
     replays

@@ -131,6 +131,16 @@ fn apply_component_palette(theme: &mut gpui_component::Theme, light: bool) {
     colors.list_hover = c(0xf8fafc);
     colors.list_active = c(0xe8efff);
     colors.list_active_border = c(0x2563eb);
+    colors.table = c(0xffffff);
+    colors.table_even = c(0xf8fafc);
+    colors.table_head = c(0xffffff);
+    colors.table_head_foreground = c(0x111827);
+    colors.table_foot = c(0xffffff);
+    colors.table_foot_foreground = c(0x111827);
+    colors.table_hover = c(0xf8fafc);
+    colors.table_active = c(0xe8efff);
+    colors.table_active_border = c(0x2563eb);
+    colors.table_row_border = c(0xe5e7eb);
     colors.selection = Hsla::from(palette(0x2563eb, light)).alpha(0.25);
     colors.danger = c(0xdc2626);
     colors.danger_foreground = Hsla::from(if light { rgb(0xffffff) } else { rgb(0x1a0b0b) });

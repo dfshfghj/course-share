@@ -5,6 +5,7 @@ use crate::download::{DownloadControl, DownloadEvent};
 use crate::http::Http;
 use crate::media::{self, MediaCandidate};
 use crate::share::{CourseGroup, Share, ShareClient};
+use crate::replay_table::{CourseReplayDelegate, PlazaReplayDelegate};
 use crate::smooth_scroll::SmoothTarget;
 use gpui_component::input::{InputEvent, InputState};
 use gpui_kit::prelude::*;
@@ -110,6 +111,10 @@ pub struct AppState {
     pub(crate) courses: Vec<Course>,
     pub(crate) selected_course: Option<usize>,
     pub(crate) replays: Vec<Replay>,
+    pub(crate) course_table: Option<Entity<gpui_component::table::TableState<CourseReplayDelegate>>>,
+    pub(crate) course_table_key: String,
+    pub(crate) plaza_table: Option<Entity<gpui_component::table::TableState<PlazaReplayDelegate>>>,
+    pub(crate) plaza_table_key: String,
     pub(crate) replays_loading: bool,
     pub(crate) replays_loading_label: String,
     pub(crate) pending_haoxue_course: Option<Course>,
@@ -212,6 +217,10 @@ impl AppState {
             courses: Vec::new(),
             selected_course: None,
             replays: Vec::new(),
+            course_table: None,
+            course_table_key: String::new(),
+            plaza_table: None,
+            plaza_table_key: String::new(),
             replays_loading: false,
             replays_loading_label: "正在加载回放…".to_string(),
             pending_haoxue_course: None,
@@ -1446,7 +1455,6 @@ impl AppState {
                             this.error = None;
                             this.refresh_plaza(window, cx);
                         } else {
-                            eprintln!("share_course published=0 errors={errors:?}");
                             this.error = Some(if errors.is_empty() {
                                 "没有发布任何回放".to_string()
                             } else {
@@ -1456,7 +1464,6 @@ impl AppState {
                         }
                     }
                     Err(error) => {
-                        eprintln!("share_course error: {error:#}");
                         this.error = Some(format!("{error:#}"));
                         this.status = "发布失败".to_string();
                     }
@@ -1831,6 +1838,7 @@ impl AppState {
                     page_url: String::new(),
                     media: vec![candidate],
                     guid: share.guid.clone(),
+                    ..Default::default()
                 }
             })
             .collect();
@@ -2079,6 +2087,7 @@ impl AppState {
             page_url: String::new(),
             media: vec![candidate],
             guid: share.guid.clone(),
+            ..Default::default()
         }
     }
 

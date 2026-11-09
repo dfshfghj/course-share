@@ -28,7 +28,7 @@ enum SidebarRow {
 }
 
 impl AppState {
-    pub(crate) fn body(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn body(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         match self.tab {
             Tab::Courses => self.courses_view(window, cx).into_any_element(),
             Tab::Plaza => self.plaza_view(window, cx).into_any_element(),
@@ -36,9 +36,9 @@ impl AppState {
         }
     }
 
-    fn courses_view(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn courses_view(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let right = if let Some(key) = &self.favorite_selected {
-            self.favorite_replay_list(key.clone(), cx).into_any_element()
+            self.favorite_replay_list(key.clone(), window, cx).into_any_element()
         } else {
             self.replay_list(window, cx).into_any_element()
         };
@@ -432,7 +432,12 @@ impl AppState {
             .into_any_element()
     }
 
-    fn favorite_replay_list(&self, key: String, cx: &mut Context<Self>) -> impl IntoElement {
+    fn favorite_replay_list(
+        &mut self,
+        key: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let replays = self.favorite_replays_for(&key);
         let count = replays.len();
         let pending_count = replays
@@ -463,26 +468,13 @@ impl AppState {
             .find(|share| share.course_key() == key && !share.teacher.is_empty())
             .map(|share| share.teacher.clone())
             .unwrap_or_default();
-        let replays_for_list = replays.clone();
-        let view = cx.entity().downgrade();
-        let list = uniform_list("favorite-replay-list", count, move |range, _, cx| {
-            let replays = replays_for_list.clone();
-            view.update(cx, |this, cx| {
-                range
-                    .map(|index| this.replay_row(&replays[index], index, cx))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default()
-        })
-        .flex_1()
-        .min_h_0()
-        .track_scroll(&self.favorite_scroll);
-        let viewport = self.smooth_viewport(
-            "favorite-replays",
-            SmoothTarget::uniform(&self.favorite_scroll),
-            list,
+        let table = self.ensure_course_table(
+            window,
+            &format!("favorite:{key}"),
+            &replays,
             cx,
         );
+        let table_view = crate::replay_table::course_table_element(&table, cx);
 
         let mut meta = Vec::new();
         if !term.is_empty() {
@@ -556,11 +548,7 @@ impl AppState {
                     .min_h_0()
                     .overflow_hidden()
                     .pt_4()
-                    .child(viewport)
-                    .child(crate::ui_scroll::uniform_rail(
-                        "favorite-replay-scrollbar",
-                        &self.favorite_scroll,
-                    )),
+                    .child(table_view),
             )
             .when(count == 0, |this| {
                 this.child(
@@ -578,8 +566,8 @@ impl AppState {
             })
     }
 
-    fn replay_list(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some(course) = self.selected_course() else {
+    fn replay_list(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(course) = self.selected_course().cloned() else {
             return div()
                 .flex_1()
                 .h_full()
@@ -597,27 +585,13 @@ impl AppState {
                 !self.replay_downloaded(replay) && !self.replay_in_progress(replay)
             })
             .count();
-        let row_count = replays.len();
-        let replays_for_list = replays.clone();
-        let view = cx.entity().downgrade();
-        let list = uniform_list("replay-virtual-list", row_count, move |range, _, cx| {
-            let replays = replays_for_list.clone();
-            view.update(cx, |this, cx| {
-                range
-                    .map(|index| this.replay_row(&replays[index], index, cx))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default()
-        })
-        .flex_1()
-        .min_h_0()
-        .track_scroll(&self.replay_scroll);
-        let viewport = self.smooth_viewport(
-            "replays",
-            SmoothTarget::uniform(&self.replay_scroll),
-            list,
+        let table = self.ensure_course_table(
+            window,
+            &format!("course:{}", course.id),
+            &replays,
             cx,
         );
+        let table_view = crate::replay_table::course_table_element(&table, cx);
 
         let mut title_block = div()
             .flex()
@@ -684,11 +658,7 @@ impl AppState {
                     .min_h_0()
                     .overflow_hidden()
                     .pt_4()
-                    .child(viewport)
-                    .child(crate::ui_scroll::uniform_rail(
-                        "replay-scrollbar",
-                        &self.replay_scroll,
-                    )),
+                    .child(table_view),
             )
             .when(self.replays_loading, |this| {
                 this.child(
@@ -718,90 +688,6 @@ impl AppState {
                         ),
                 )
             })
-    }
-
-    fn replay_row(
-        &self,
-        replay: &crate::blackboard::Replay,
-        index: usize,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let downloaded = self.replay_downloaded(replay);
-        let in_progress = self.replay_in_progress(replay);
-        let has_cache = self.replay_has_cache(replay);
-        let (label, class) = if downloaded {
-            ("已下载", 2)
-        } else if in_progress {
-            ("下载中", 1)
-        } else if has_cache {
-            ("继续下载", 0)
-        } else {
-            ("下载", 0)
-        };
-        let button = Button::new(ElementId::Name(format!("download-{index}").into())).label(label);
-        let button = match class {
-            2 => button.success().disabled(true),
-            1 => button.warning().disabled(true),
-            _ => button.primary(),
-        };
-        let replay_for_download = replay.clone();
-        let replay_for_preview = replay.clone();
-        let preview = Button::new(ElementId::Name(format!("preview-{index}").into()))
-            .label("预览")
-            .ghost()
-            .disabled(replay.media.is_empty())
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.preview_replay(replay_for_preview.clone(), cx);
-            }));
-        let lesson = if replay.sub_title.is_empty() {
-            replay.replay_id.clone()
-        } else {
-            replay.sub_title.clone()
-        };
-        let time = if replay.record_time.trim().is_empty() {
-            "—".to_string()
-        } else {
-            replay.record_time.clone()
-        };
-        div()
-            .h(px(52.0))
-            .w_full()
-            .flex_none()
-            .px_5()
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap_4()
-            .border_b_1()
-            .border_color(tone(BORDER))
-            .hover(|style| style.bg(tone(0xf8fafc)))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .child(lesson),
-            )
-            .child(
-                div()
-                    .w(px(170.0))
-                    .flex_none()
-                    .text_sm()
-                    .text_color(tone(MUTED))
-                    .truncate()
-                    .child(time),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(preview)
-                    .child(button.on_click(cx.listener(move |this, _, window, cx| {
-                        this.download_replay(replay_for_download.clone(), window, cx);
-                    }))),
-            )
-            .into_any_element()
     }
 }
 

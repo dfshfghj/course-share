@@ -61,6 +61,25 @@ pub(crate) fn subtitle(text: impl Into<String>) -> gpui_kit::Div {
         .child(gpui_kit::SharedString::from(text.into()))
 }
 
+/// Measure a single line of text with the window's current font. Table-like
+/// rows share these measured widths so every column lines up without fixed
+/// pixel guesses.
+pub(crate) fn measured_text_width(
+    window: &Window,
+    text: &str,
+    font_size: f32,
+) -> f32 {
+    if text.is_empty() {
+        return 0.0;
+    }
+    let style = window.text_style();
+    let run = style.to_run(text.len());
+    let layout = window
+        .text_system()
+        .layout_line(text, px(font_size), &[run], None);
+    f32::from(layout.width) + 2.0
+}
+
 pub(crate) fn title(text: impl Into<String>) -> gpui_kit::Div {
     div()
         .text_xl()
@@ -282,6 +301,7 @@ impl AppState {
                 view.update(cx, |this, cx| {
                     this.smooth_wheel("download-tasks", target, event, cx);
                 });
+                true
             }),
         )
         .into_any_element();
