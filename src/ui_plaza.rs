@@ -3,6 +3,7 @@ use crate::smooth_scroll::{SmoothTarget, SmoothWheel};
 use crate::theme::tone;
 use crate::ui::{subtitle, title, BORDER, PANEL, PRIMARY};
 use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::select::Select;
 use gpui_component::IconName;
 use gpui_component::spinner::Spinner;
 use gpui_component::Disableable as _;
@@ -50,7 +51,7 @@ impl AppState {
         } else {
             Some(PlazaFooter::Done)
         };
-        let mut sizes = vec![gpui_kit::size(px(300.0), px(144.0)); row_count];
+        let mut sizes = vec![gpui_kit::size(px(300.0), px(160.0)); row_count];
         if let Some(kind) = footer {
             sizes.push(gpui_kit::size(
                 px(300.0),
@@ -79,7 +80,7 @@ impl AppState {
                                 })
                                 .collect::<Vec<_>>();
                             div()
-                                .h(px(144.0))
+                                .h(px(160.0))
                                 .w_full()
                                 .flex()
                                 .justify_center()
@@ -162,9 +163,10 @@ impl AppState {
             .flex_col()
             .child(
                 div()
-                    .h(px(64.0))
+                    .min_h(px(64.0))
                     .flex_none()
                     .px_5()
+                    .py_2()
                     .flex()
                     .items_center()
                     .justify_center()
@@ -172,11 +174,41 @@ impl AppState {
                     .border_color(tone(BORDER))
                     .child(
                         div()
-                            .w(px(520.0))
                             .flex()
+                            .flex_wrap()
                             .items_center()
+                            .justify_center()
                             .gap_2()
-                            .child(crate::ui::input_field(&self.plaza_search, cx))
+                            .children(self.plaza_term_select.as_ref().map(|state| {
+                                div().w(px(172.0)).flex_none().child(
+                                    Select::new(state)
+                                        .placeholder("全部学期")
+                                        .search_placeholder("搜索学期…")
+                                        .menu_width(px(220.0)),
+                                )
+                            }))
+                            .children(self.plaza_college_select.as_ref().map(|state| {
+                                div().w(px(160.0)).flex_none().child(
+                                    Select::new(state)
+                                        .placeholder("全部学院")
+                                        .search_placeholder("搜索学院…")
+                                        .menu_width(px(260.0)),
+                                )
+                            }))
+                            .children(self.plaza_schedule_select.as_ref().map(|state| {
+                                div().w(px(150.0)).flex_none().child(
+                                    Select::new(state)
+                                        .placeholder("全部课表")
+                                        .search_placeholder("搜索课表…")
+                                        .menu_width(px(180.0)),
+                                )
+                            }))
+                            .child(
+                                div()
+                                    .w(px(300.0))
+                                    .flex_none()
+                                    .child(crate::ui::input_field(&self.plaza_search, cx)),
+                            )
                             .child(
                                 Button::new("plaza-search")
                                     .label("搜索")
@@ -241,14 +273,27 @@ impl AppState {
         if !course.teacher.is_empty() {
             meta.push(course.teacher.clone());
         }
+        let mut details = Vec::new();
+        if !course.college.is_empty() {
+            details.push(course.college.clone());
+        }
+        if !course.credits.is_empty() {
+            details.push(format!("{} 学分", course.credits));
+        }
+        if !course.course_type.is_empty() {
+            details.push(course.course_type.clone());
+        }
+        if !course.schedule_type.is_empty() {
+            details.push(course.schedule_type.clone());
+        }
         let mut card = div()
             .id(ElementId::Name(format!("plaza-card-{index}").into()))
             .w(px(300.0))
-            .h(px(128.0))
+            .h(px(144.0))
             .p_4()
             .flex()
             .flex_col()
-            .gap_2()
+            .gap_1()
             .bg(tone(PANEL))
             .border_1()
             .border_color(tone(BORDER))
@@ -261,6 +306,7 @@ impl AppState {
             .child(
                 div()
                     .flex()
+                    .flex_shrink_0()
                     .items_center()
                     .justify_between()
                     .gap_2()
@@ -289,10 +335,15 @@ impl AppState {
                     ),
             );
         if !meta.is_empty() {
-            card = card.child(subtitle(meta.join(" · ")));
+            card = card.child(subtitle(meta.join(" · ")).truncate().flex_shrink_0());
         }
-        card.child(subtitle(format!("{} 条回放", course.count)))
-            .into_any_element()
+        if !details.is_empty() {
+            card = card.child(subtitle(details.join(" · ")).truncate().flex_shrink_0());
+        }
+        card.child(
+            subtitle(format!("{} 条回放", course.count)).flex_shrink_0(),
+        )
+        .into_any_element()
     }
 
     fn plaza_detail(
@@ -310,6 +361,25 @@ impl AppState {
         let star_label = if starred { "★" } else { "☆" };
         let key_for_star = course.key.clone();
         let name_for_star = course.course_name.clone();
+        let mut meta = Vec::new();
+        if !course.term.is_empty() {
+            meta.push(course.term.clone());
+        }
+        if !course.teacher.is_empty() {
+            meta.push(course.teacher.clone());
+        }
+        if !course.college.is_empty() {
+            meta.push(course.college.clone());
+        }
+        if !course.credits.is_empty() {
+            meta.push(format!("{} 学分", course.credits));
+        }
+        if !course.course_type.is_empty() {
+            meta.push(course.course_type.clone());
+        }
+        if !course.schedule_type.is_empty() {
+            meta.push(course.schedule_type.clone());
+        }
         div()
             .size_full()
             .flex()
@@ -327,14 +397,25 @@ impl AppState {
                     .child(
                         div()
                             .flex()
-                            .items_center()
-                            .gap_3()
-                            .child(title(course.course_name.clone()))
+                            .flex_col()
+                            .gap_1()
                             .child(
                                 div()
-                                    .flex_none()
-                                    .child(subtitle(format!("{} 条回放", course.count))),
-                            ),
+                                    .flex()
+                                    .items_center()
+                                    .gap_3()
+                                    .child(title(course.course_name.clone()))
+                                    .child(
+                                        div()
+                                            .flex_none()
+                                            .child(subtitle(format!("{} 条回放", course.count))),
+                                    ),
+                            )
+                            .when(!meta.is_empty(), |this| {
+                                this.child(
+                                    subtitle(meta.join(" · ")).truncate().flex_shrink_0(),
+                                )
+                            }),
                     )
                     .child(
                         div()

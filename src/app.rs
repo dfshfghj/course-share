@@ -4,10 +4,12 @@ use crate::config::AppConfig;
 use crate::download::{DownloadControl, DownloadEvent};
 use crate::http::Http;
 use crate::media::{self, MediaCandidate};
-use crate::share::{CourseGroup, Share, ShareClient};
+use crate::share::{CourseFacets, CourseGroup, Share, ShareClient};
 use crate::replay_table::{CourseReplayDelegate, PlazaReplayDelegate};
 use crate::smooth_scroll::SmoothTarget;
 use gpui_component::input::{InputEvent, InputState};
+use gpui_component::select::{SearchableVec, SelectEvent, SelectState};
+use gpui_component::IndexPath;
 use gpui_kit::prelude::*;
 use gpui_kit::{px, Context, Entity, Pixels, ScrollHandle, Task, UniformListScrollHandle, Window};
 use std::collections::{HashMap, HashSet};
@@ -19,6 +21,22 @@ use std::time::Duration;
 use url::Url;
 
 const PLAZA_PAGE_SIZE: usize = 200;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PlazaFilters {
+    pub(crate) term: String,
+    pub(crate) college: String,
+    pub(crate) schedule_type: String,
+}
+
+pub(crate) type PlazaSelectState = Entity<SelectState<SearchableVec<String>>>;
+
+#[derive(Clone, Copy)]
+enum PlazaFilterKind {
+    Term,
+    College,
+    Schedule,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
@@ -126,6 +144,11 @@ pub struct AppState {
     pub(crate) plaza_has_more: bool,
     pub(crate) plaza_total: usize,
     pub(crate) plaza_scrolled: bool,
+    pub(crate) plaza_filters: PlazaFilters,
+    pub(crate) plaza_facets: CourseFacets,
+    pub(crate) plaza_term_select: Option<PlazaSelectState>,
+    pub(crate) plaza_college_select: Option<PlazaSelectState>,
+    pub(crate) plaza_schedule_select: Option<PlazaSelectState>,
     pub(crate) download_tasks: Vec<DownloadTask>,
     pub(crate) download_scroll: ScrollHandle,
     pub(crate) download_attempt: u64,
@@ -182,7 +205,7 @@ impl AppState {
         let (download_tx, download_rx) = std::sync::mpsc::channel::<DownloadEvent>();
         let scheduler = crate::download_manager::DownloadScheduler::new(download_tx);
 
-        let app = Self {
+        let mut app = Self {
             http: None,
             config,
             tab: Tab::Courses,
@@ -232,6 +255,11 @@ impl AppState {
             plaza_has_more: false,
             plaza_total: 0,
             plaza_scrolled: false,
+            plaza_filters: PlazaFilters::default(),
+            plaza_facets: CourseFacets::default(),
+            plaza_term_select: None,
+            plaza_college_select: None,
+            plaza_schedule_select: None,
             download_tasks: Vec::new(),
             download_scroll: ScrollHandle::new(),
             download_attempt: 0,
@@ -254,6 +282,7 @@ impl AppState {
             },
         )
         .detach();
+        app.rebuild_plaza_selects(window, cx);
         cx.spawn_in(window, async move |this, cx| loop {
             match download_rx.try_recv() {
                 Ok(event) => {
@@ -1472,6 +1501,143 @@ impl AppState {
         );
     }
 
+    fn make_plaza_select(
+        &mut self,
+        options: Vec<String>,
+        current_label: String,
+        all_label: &'static str,
+        kind: PlazaFilterKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> PlazaSelectState {
+        let selected_index = options
+            .iter()
+            .position(|option| option == &current_label)
+            .map(IndexPath::new);
+        let state = cx.new(|cx| {
+            SelectState::new(SearchableVec::new(options), selected_index, window, cx).searchable(true)
+        });
+        cx.subscribe_in(
+            &state,
+            window,
+            move |this, _state, event: &SelectEvent<SearchableVec<String>>, window, cx| {
+                let SelectEvent::Confirm(value) = event;
+                let selected = value.clone().unwrap_or_else(|| all_label.to_string());
+                let mapped = if selected == all_label {
+                    String::new()
+                } else if matches!(kind, PlazaFilterKind::Schedule) {
+                    this.plaza_facets
+                        .schedule_types
+                        .iter()
+                        .find(|option| option.label == selected)
+                        .map(|option| option.value.clone())
+                        .unwrap_or_default()
+                } else {
+                    selected
+                };
+                let current = match kind {
+                    PlazaFilterKind::Term => &mut this.plaza_filters.term,
+                    PlazaFilterKind::College => &mut this.plaza_filters.college,
+                    PlazaFilterKind::Schedule => &mut this.plaza_filters.schedule_type,
+                };
+                if *current != mapped {
+                    *current = mapped;
+                    cx.defer_in(window, |this, window, cx| this.refresh_plaza(window, cx));
+                }
+            },
+        )
+        .detach();
+        state
+    }
+
+    pub(crate) fn rebuild_plaza_selects(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut term_options = vec!["全部学期".to_string()];
+        term_options.extend(self.plaza_facets.terms.iter().cloned());
+        let mut college_options = vec!["全部学院".to_string()];
+        college_options.extend(self.plaza_facets.colleges.iter().cloned());
+        let mut schedule_options = vec!["全部课表".to_string()];
+        schedule_options.extend(
+            self.plaza_facets
+                .schedule_types
+                .iter()
+                .map(|option| option.label.clone()),
+        );
+
+        if !self.plaza_filters.term.is_empty()
+            && !term_options
+                .iter()
+                .any(|option| option == &self.plaza_filters.term)
+        {
+            self.plaza_filters.term.clear();
+        }
+        if !self.plaza_filters.college.is_empty()
+            && !college_options
+                .iter()
+                .any(|option| option == &self.plaza_filters.college)
+        {
+            self.plaza_filters.college.clear();
+        }
+        if !self.plaza_filters.schedule_type.is_empty()
+            && !self
+                .plaza_facets
+                .schedule_types
+                .iter()
+                .any(|option| option.value == self.plaza_filters.schedule_type)
+        {
+            self.plaza_filters.schedule_type.clear();
+        }
+
+        let term_current = if self.plaza_filters.term.is_empty() {
+            "全部学期".to_string()
+        } else {
+            self.plaza_filters.term.clone()
+        };
+        let college_current = if self.plaza_filters.college.is_empty() {
+            "全部学院".to_string()
+        } else {
+            self.plaza_filters.college.clone()
+        };
+        let schedule_current = if self.plaza_filters.schedule_type.is_empty() {
+            "全部课表".to_string()
+        } else {
+            self.plaza_facets
+                .schedule_types
+                .iter()
+                .find(|option| option.value == self.plaza_filters.schedule_type)
+                .map(|option| option.label.clone())
+                .unwrap_or_else(|| "全部课表".to_string())
+        };
+
+        self.plaza_term_select = Some(self.make_plaza_select(
+            term_options,
+            term_current,
+            "全部学期",
+            PlazaFilterKind::Term,
+            window,
+            cx,
+        ));
+        self.plaza_college_select = Some(self.make_plaza_select(
+            college_options,
+            college_current,
+            "全部学院",
+            PlazaFilterKind::College,
+            window,
+            cx,
+        ));
+        self.plaza_schedule_select = Some(self.make_plaza_select(
+            schedule_options,
+            schedule_current,
+            "全部课表",
+            PlazaFilterKind::Schedule,
+            window,
+            cx,
+        ));
+    }
+
     pub(crate) fn refresh_plaza(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.plaza_selected_course = None;
         self.plaza_grid_scroll = gpui_kit::base::VirtualListScrollHandle::new();
@@ -1479,6 +1645,7 @@ impl AppState {
         self.plaza_scrolled = false;
         self.plaza_loading_more = false;
         let query = self.plaza_search.read(cx).value().trim().to_string();
+        let filters = self.plaza_filters.clone();
         let backend = self.config.backend_url.clone();
         self.busy = true;
         self.error = None;
@@ -1487,11 +1654,25 @@ impl AppState {
         self.run_blocking(
             window,
             cx,
-            move || ShareClient::new(&backend)?.list_courses_page(&query, PLAZA_PAGE_SIZE, 0),
-            |this, result, _window, cx| {
+            move || -> anyhow::Result<(CourseFacets, Vec<CourseGroup>, usize)> {
+                let client = ShareClient::new(&backend)?;
+                let facets = client.course_facets().unwrap_or_default();
+                let (courses, total) = client.list_courses_page(
+                    &query,
+                    &filters.term,
+                    &filters.college,
+                    &filters.schedule_type,
+                    PLAZA_PAGE_SIZE,
+                    0,
+                )?;
+                Ok((facets, courses, total))
+            },
+            |this, result, window, cx| {
                 this.busy = false;
                 match result {
-                    Ok((courses, total)) => {
+                    Ok((facets, courses, total)) => {
+                        this.plaza_facets = facets;
+                        this.rebuild_plaza_selects(window, cx);
                         this.plaza_courses = courses;
                         this.plaza_total = total;
                         this.plaza_has_more = this.plaza_courses.len() < total;
@@ -1514,21 +1695,29 @@ impl AppState {
             return;
         }
         let query = self.plaza_search.read(cx).value().trim().to_string();
+        let filters = self.plaza_filters.clone();
         let backend = self.config.backend_url.clone();
         let offset = self.plaza_courses.len();
         let query_for_work = query.clone();
+        let filters_for_work = filters.clone();
         self.plaza_loading_more = true;
         cx.notify();
         self.run_background(
             cx,
             move || {
-                ShareClient::new(&backend)?
-                    .list_courses_page(&query_for_work, PLAZA_PAGE_SIZE, offset)
+                ShareClient::new(&backend)?.list_courses_page(
+                    &query_for_work,
+                    &filters_for_work.term,
+                    &filters_for_work.college,
+                    &filters_for_work.schedule_type,
+                    PLAZA_PAGE_SIZE,
+                    offset,
+                )
             },
             move |this, result, cx| {
                 this.plaza_loading_more = false;
                 let current_query = this.plaza_search.read(cx).value().trim().to_string();
-                if current_query != query {
+                if current_query != query || this.plaza_filters != filters {
                     cx.notify();
                     return;
                 }

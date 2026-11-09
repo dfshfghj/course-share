@@ -191,6 +191,32 @@ pub struct CourseGroup {
     pub count: usize,
     #[serde(default)]
     pub downloads: i64,
+    #[serde(default)]
+    pub college: String,
+    #[serde(default)]
+    pub credits: String,
+    #[serde(default)]
+    pub course_type: String,
+    #[serde(default)]
+    pub schedule_type: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct CourseFacets {
+    #[serde(default)]
+    pub terms: Vec<String>,
+    #[serde(default)]
+    pub colleges: Vec<String>,
+    #[serde(default)]
+    pub schedule_types: Vec<FacetOption>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct FacetOption {
+    #[serde(default)]
+    pub value: String,
+    #[serde(default)]
+    pub label: String,
 }
 
 #[derive(Clone)]
@@ -272,15 +298,30 @@ impl ShareClient {
     pub fn list_courses_page(
         &self,
         query: &str,
+        term: &str,
+        college: &str,
+        schedule_type: &str,
         limit: usize,
         offset: usize,
     ) -> Result<(Vec<CourseGroup>, usize)> {
         let mut url = Url::parse(&format!("{}/api/courses", self.base_url))
             .with_context(|| format!("invalid backend URL {}", self.base_url))?;
-        url.query_pairs_mut()
-            .append_pair("limit", &limit.to_string())
-            .append_pair("offset", &offset.to_string())
-            .append_pair("q", query);
+        {
+            let mut pairs = url.query_pairs_mut();
+            pairs
+                .append_pair("limit", &limit.to_string())
+                .append_pair("offset", &offset.to_string())
+                .append_pair("q", query);
+            if !term.is_empty() {
+                pairs.append_pair("term", term);
+            }
+            if !college.is_empty() {
+                pairs.append_pair("college", college);
+            }
+            if !schedule_type.is_empty() {
+                pairs.append_pair("schedule_type", schedule_type);
+            }
+        }
         let response = self
             .client
             .get(url.as_str())
@@ -299,6 +340,17 @@ impl ShareClient {
             .map(|value| value as usize)
             .unwrap_or(page.len());
         Ok((page, total))
+    }
+
+    pub fn course_facets(&self) -> Result<CourseFacets> {
+        let url = format!("{}/api/courses/facets", self.base_url);
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .with_context(|| format!("GET {url}"))?;
+        let value = parse_json(response)?;
+        serde_json::from_value(value).context("parse course facets")
     }
 
     pub fn list_course_shares(&self, course_id: &str, course_name: &str) -> Result<Vec<Share>> {
