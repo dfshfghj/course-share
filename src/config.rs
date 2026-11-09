@@ -13,6 +13,8 @@ pub struct AppConfig {
     pub ffmpeg: String,
     #[serde(default = "default_theme")]
     pub theme: String,
+    #[serde(default = "default_auto_update")]
+    pub auto_update: bool,
     #[serde(default)]
     pub starred_courses: Vec<String>,
 }
@@ -39,6 +41,10 @@ fn default_theme() -> String {
     "auto".to_string()
 }
 
+fn default_auto_update() -> bool {
+    true
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -46,6 +52,7 @@ impl Default for AppConfig {
             download_dir: default_download_dir(),
             ffmpeg: default_ffmpeg(),
             theme: default_theme(),
+            auto_update: default_auto_update(),
             starred_courses: Vec::new(),
         }
     }

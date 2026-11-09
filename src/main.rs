@@ -22,6 +22,7 @@ mod ui_courses;
 mod ui_plaza;
 mod ui_scroll;
 mod ui_settings;
+mod update;
 
 use gpui_kit::prelude::*;
 use gpui_kit::{point, px, size, Bounds, WindowBounds, WindowDecorations, WindowOptions};

@@ -501,8 +501,14 @@ impl Render for AppState {
         } else {
             self.login_view(cx).into_any_element()
         };
+        let update_toast = if self.update_info.is_some() && !self.update_dismissed {
+            Some(self.update_toast(cx))
+        } else {
+            None
+        };
         div()
             .size_full()
+            .relative()
             .flex()
             .flex_col()
             .bg(tone(BG))
@@ -576,5 +582,77 @@ impl Render for AppState {
                         .child(self.login_view(cx)),
                 )
             })
+            .when_some(update_toast, |this, toast| this.child(toast))
+    }
+}
+
+impl AppState {
+    fn update_toast(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(info) = self.update_info.clone() else {
+            return div().into_any_element();
+        };
+        let busy = self.update_busy;
+        let install_label = if busy { "正在更新…" } else { "立即更新" };
+        div()
+            .absolute()
+            .right(px(24.0))
+            .bottom(px(24.0))
+            .w(px(340.0))
+            .p_4()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .bg(tone(PANEL))
+            .border_1()
+            .border_color(tone(BORDER))
+            .rounded_lg()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(format!("发现新版本 {}", info.version)),
+                    )
+                    .child(
+                        Button::new("update-close")
+                            .label("✕")
+                            .ghost()
+                            .small()
+                            .on_click(cx.listener(|this, _, _, cx| this.dismiss_update(cx))),
+                    ),
+            )
+            .child(subtitle(format!(
+                "当前版本 v{}",
+                env!("CARGO_PKG_VERSION")
+            )))
+            .when(busy, |this| this.child(subtitle("正在下载并安装更新…")))
+            .when_some(self.update_error.clone(), |this, error| {
+                this.child(div().text_sm().text_color(tone(DANGER)).child(error))
+            })
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .gap_2()
+                    .child(
+                        Button::new("update-skip")
+                            .label("跳过")
+                            .ghost()
+                            .on_click(cx.listener(|this, _, _, cx| this.dismiss_update(cx))),
+                    )
+                    .child(
+                        Button::new("update-install")
+                            .label(install_label)
+                            .primary()
+                            .disabled(busy)
+                            .on_click(cx.listener(|this, _, _, cx| this.start_update(cx))),
+                    ),
+            )
+            .into_any_element()
     }
 }

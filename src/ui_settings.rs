@@ -1,8 +1,8 @@
 use crate::app::AppState;
 use crate::theme::tone;
-use crate::ui::{subtitle, title, DANGER, MUTED, SUCCESS};
+use crate::ui::{detail, subtitle, title, DANGER, MUTED, SUCCESS};
 use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::IconName;
+use gpui_component::{Disableable as _, IconName};
 use gpui_kit::prelude::*;
 use gpui_kit::{div, Context, IntoElement, Window};
 
@@ -119,7 +119,7 @@ impl AppState {
                     div()
                     .text_sm()
                     .text_color(tone(SUCCESS))
-                    .child("v 0.1.0")
+                    .child(format!("v {}", env!("CARGO_PKG_VERSION")))
                     )
                 )
                 .child(
@@ -140,6 +140,46 @@ impl AppState {
                                 }
                             })),
                     )
+                )
+                .child(
+                    div()
+                        .pl_4()
+                        .mt_2()
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_2()
+                        .child("自动更新：")
+                        .child(detail(if self.config.auto_update {
+                            "已开启"
+                        } else {
+                            "已关闭"
+                        }))
+                        .child(
+                            Button::new("toggle-auto-update")
+                                .label(if self.config.auto_update {
+                                    "关闭自动更新"
+                                } else {
+                                    "开启自动更新"
+                                })
+                                .ghost()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.toggle_auto_update(cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("manual-update")
+                                .label(if self.update_busy {
+                                    "检查中…"
+                                } else {
+                                    "检查更新"
+                                })
+                                .ghost()
+                                .disabled(cfg!(debug_assertions) || self.update_busy)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.manual_check_updates(cx);
+                                })),
+                        ),
                 )
             )
             .child(

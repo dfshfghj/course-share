@@ -149,6 +149,12 @@ pub struct AppState {
     pub(crate) plaza_term_select: Option<PlazaSelectState>,
     pub(crate) plaza_college_select: Option<PlazaSelectState>,
     pub(crate) plaza_schedule_select: Option<PlazaSelectState>,
+    pub(crate) update_info: Option<crate::update::UpdateInfo>,
+    pub(crate) update_dismissed: bool,
+    pub(crate) update_busy: bool,
+    pub(crate) update_error: Option<String>,
+    #[cfg_attr(debug_assertions, allow(dead_code))]
+    pub(crate) update_checked: bool,
     pub(crate) download_tasks: Vec<DownloadTask>,
     pub(crate) download_scroll: ScrollHandle,
     pub(crate) download_attempt: u64,
@@ -260,6 +266,11 @@ impl AppState {
             plaza_term_select: None,
             plaza_college_select: None,
             plaza_schedule_select: None,
+            update_info: None,
+            update_dismissed: false,
+            update_busy: false,
+            update_error: None,
+            update_checked: false,
             download_tasks: Vec::new(),
             download_scroll: ScrollHandle::new(),
             download_attempt: 0,
@@ -312,6 +323,136 @@ impl AppState {
 
     pub(crate) fn bootstrap(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.restore_session(window, cx);
+        #[cfg(not(debug_assertions))]
+        if self.config.auto_update {
+            self.check_updates(false, cx);
+        }
+    }
+
+    #[cfg(not(debug_assertions))]
+    pub(crate) fn check_updates(&mut self, force: bool, cx: &mut Context<Self>) {
+        if force {
+            self.update_checked = false;
+            self.update_dismissed = false;
+            self.update_info = None;
+            self.update_error = None;
+        }
+        if self.update_checked {
+            return;
+        }
+        self.update_checked = true;
+        let current = env!("CARGO_PKG_VERSION").to_string();
+        self.run_background(
+            cx,
+            move || crate::update::check(&current),
+            move |this, result, cx| match result {
+                Ok(Some(info)) => {
+                    this.update_info = Some(info);
+                    this.update_dismissed = false;
+                    this.update_error = None;
+                    cx.notify();
+                    cx.spawn(async move |this, cx| {
+                        cx.background_executor()
+                            .timer(Duration::from_secs(30))
+                            .await;
+                        let _ = this.update(cx, |this, cx| {
+                            if this.update_info.is_some()
+                                && !this.update_dismissed
+                                && !this.update_busy
+                            {
+                                this.update_dismissed = true;
+                                cx.notify();
+                            }
+                        });
+                    })
+                    .detach();
+                }
+                Ok(None) if force => {
+                    this.status = format!("已是最新版本 v{}", env!("CARGO_PKG_VERSION"));
+                    cx.notify();
+                }
+                Err(error) if force => {
+                    this.update_error = Some(format!("检查更新失败：{error:#}"));
+                    cx.notify();
+                }
+                _ => {}
+            },
+        );
+    }
+
+    pub(crate) fn start_update(&mut self, cx: &mut Context<Self>) {
+        if self.update_busy {
+            return;
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            self.update_busy = true;
+            self.update_error = None;
+            self.status = "正在下载更新…".to_string();
+            cx.notify();
+            self.run_background(
+                cx,
+                crate::update::perform_update,
+                |this, result, cx| {
+                    this.update_busy = false;
+                    match result {
+                        Ok(version) => {
+                            this.status = format!("已更新到 v{version}，正在重启…");
+                            cx.notify();
+                            let error = self_update::restart::restart().unwrap_err();
+                            this.update_error =
+                                Some(format!("更新完成，但重启失败：{error:#}"));
+                            this.status = "更新完成，请手动重启应用".to_string();
+                            cx.notify();
+                        }
+                        Err(error) => {
+                            this.update_error = Some(format!("更新失败：{error:#}"));
+                            this.status = "更新失败".to_string();
+                            cx.notify();
+                        }
+                    }
+                },
+            );
+        }
+        #[cfg(debug_assertions)]
+        {
+            self.update_error = Some("开发构建不执行自动更新".to_string());
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn manual_check_updates(&mut self, cx: &mut Context<Self>) {
+        #[cfg(not(debug_assertions))]
+        {
+            self.check_updates(true, cx);
+        }
+        #[cfg(debug_assertions)]
+        {
+            self.update_error = Some("开发构建不检查更新".to_string());
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn toggle_auto_update(&mut self, cx: &mut Context<Self>) {
+        self.config.auto_update = !self.config.auto_update;
+        match self.config.save() {
+            Ok(()) => {
+                self.status = if self.config.auto_update {
+                    "已开启自动更新".to_string()
+                } else {
+                    "已关闭自动更新".to_string()
+                };
+            }
+            Err(error) => {
+                self.error = Some(format!("保存设置失败：{error:#}"));
+            }
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn dismiss_update(&mut self, cx: &mut Context<Self>) {
+        self.update_dismissed = true;
+        cx.notify();
     }
 
     fn run_blocking<T, F, A>(&mut self, window: &mut Window, cx: &mut Context<Self>, work: F, apply: A)
