@@ -182,7 +182,7 @@ impl AppState {
             InputState::new(window, cx).placeholder("粘贴 Cookie：name=value; name2=value2")
         });
         let plaza_search = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("搜索课程、回放、教师或 GUID")
+            InputState::new(window, cx).placeholder("搜索课程或教师")
         });
         let backend_input = cx.new(|cx| {
             InputState::new(window, cx)
@@ -196,7 +196,7 @@ impl AppState {
         });
         let ffmpeg_input = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("留空自动（优先使用内置 ffmpeg）")
+                .placeholder("留空自动")
                 .default_value(config.ffmpeg.clone())
         });
         let verification_input = cx.new(|cx| {
@@ -2223,34 +2223,6 @@ impl AppState {
         cx.notify();
     }
 
-    pub(crate) fn test_backend(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let backend = self.backend_input.read(cx).value().trim().to_string();
-        self.busy = true;
-        self.status = "测试后端…".to_string();
-        self.error = None;
-        cx.notify();
-        self.run_blocking(
-            window,
-            cx,
-            move || ShareClient::new(&backend)?.health(),
-            |this, result, _window, cx| {
-                this.busy = false;
-                match result {
-                    Ok(value) => {
-                        let count = value.get("shares").and_then(|v| v.as_u64()).unwrap_or(0);
-                        this.status = format!("后端正常，已有 {count} 条分享");
-                        this.error = None;
-                    }
-                    Err(error) => {
-                        this.error = Some(format!("后端不可用：{error:#}"));
-                        this.status = "后端测试失败".to_string();
-                    }
-                }
-                cx.notify();
-            },
-        );
-    }
-
     pub(crate) fn copy_text(&mut self, text: String, cx: &mut Context<Self>) {
         cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text));
         self.status = "已复制到剪贴板".to_string();
@@ -2283,13 +2255,4 @@ impl AppState {
     pub(crate) fn selected_course(&self) -> Option<&Course> {
         self.selected_course.and_then(|index| self.courses.get(index))
     }
-
-    pub(crate) fn cookie_summary(&self) -> String {
-        self.http
-            .as_ref()
-            .map(|http| format!("Cookie {} 条", http.cookie_count()))
-            .unwrap_or_else(|| "未登录".to_string())
-    }
-
-
 }

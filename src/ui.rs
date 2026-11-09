@@ -56,6 +56,13 @@ pub(crate) fn input_field(
 
 pub(crate) fn subtitle(text: impl Into<String>) -> gpui_kit::Div {
     div()
+        .text_lg()
+        .font_weight(FontWeight::BOLD)
+        .child(gpui_kit::SharedString::from(text.into()))
+}
+
+pub(crate) fn detail(text: impl Into<String>) -> gpui_kit::Div {
+    div()
         .text_sm()
         .text_color(tone(MUTED))
         .child(gpui_kit::SharedString::from(text.into()))
@@ -99,7 +106,7 @@ impl AppState {
             let kind = pending.challenge.kind.clone();
             let mut card = card
                 .child(title("需要二次验证"))
-                .child(subtitle(format!(
+                .child(detail(format!(
                     "{}：{}",
                     kind.label(),
                     pending.challenge.message
@@ -143,7 +150,7 @@ impl AppState {
                             .flex()
                             .items_center()
                             .gap_2()
-                            .child(subtitle("正在获取验证码图片…"))
+                            .child(detail("正在获取验证码图片…"))
                             .child(
                                 Button::new("refresh-captcha-empty")
                                     .label("刷新验证码")
@@ -183,7 +190,7 @@ impl AppState {
         } else {
             card
                 .child(title("登录教学网"))
-                .child(subtitle(
+                .child(detail(
                     "使用 IAAA 账号登录后读取个人课程与回放；不会保存密码。",
                 ))
                 .child(
@@ -219,7 +226,7 @@ impl AppState {
                         .flex_col()
                         .gap_3()
                         .child(input_field(&self.cookie_input, cx))
-                        .child(subtitle(
+                        .child(detail(
                             "在浏览器登录 course.pku.edu.cn 后，从 DevTools 复制 Cookie 请求头。",
                         ))
                         .into_any_element()
@@ -337,7 +344,7 @@ impl AppState {
                                     .collect::<String>(),
                             ),
                     )
-                    .child(subtitle(summary).flex_none()),
+                    .child(detail(summary).flex_none()),
             )
             .when(!self.download_tasks.is_empty(), |this| {
                 this.child(div().h(px(1.0)).w_full().bg(tone(BORDER))).child(
@@ -503,7 +510,7 @@ impl Render for AppState {
             .child(
                 gpui_component::TitleBar::new()
                     .bg(tone(PANEL))
-                    .border_color(tone(BORDER))
+                    .border_0()
                     .child(
                     div()
                         .flex()

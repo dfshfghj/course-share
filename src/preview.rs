@@ -331,7 +331,7 @@ fn html_escape(value: &str) -> String {
         .replace('"', "&quot;")
 }
 
-fn open_browser(url: &str) -> Result<()> {
+pub(crate) fn open_browser(url: &str) -> Result<()> {
     #[cfg(target_os = "linux")]
     {
         // A default Firefox often refuses to start when another

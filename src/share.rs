@@ -239,12 +239,6 @@ impl ShareClient {
         })
     }
 
-    pub fn health(&self) -> Result<serde_json::Value> {
-        let url = format!("{}/api/health", self.base_url);
-        let response = self.client.get(&url).send().with_context(|| format!("GET {url}"))?;
-        parse_json(response)
-    }
-
     pub fn list_page(
         &self,
         query: &str,

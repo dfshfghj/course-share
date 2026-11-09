@@ -72,7 +72,7 @@ fn palette(value: u32, light: bool) -> Rgba {
         0xdc2626 => 0xff6b6b, // danger
         0x15803d => 0x51cf66, // success
         0xb45309 => 0xffd166, // warning
-        0xf8fafc => 0x152238, // row hover
+        0xf8fafc => 0x152238, // table even row
         0xf1f5f9 => 0x1b2b45, // hover strong
         0xeef2f8 => 0x152238, // section header
         0xe6ecf5 => 0x1d2a3d, // section header hover
@@ -137,7 +137,7 @@ fn apply_component_palette(theme: &mut gpui_component::Theme, light: bool) {
     colors.table_head_foreground = c(0x111827);
     colors.table_foot = c(0xffffff);
     colors.table_foot_foreground = c(0x111827);
-    colors.table_hover = c(0xf8fafc);
+    colors.table_hover = c(0xe6ecf5);
     colors.table_active = c(0xe8efff);
     colors.table_active_border = c(0x2563eb);
     colors.table_row_border = c(0xe5e7eb);
@@ -154,6 +154,23 @@ fn apply_component_palette(theme: &mut gpui_component::Theme, light: bool) {
     colors.warning_foreground = Hsla::from(if light { rgb(0xffffff) } else { rgb(0x1a1205) });
     colors.warning_hover = c(0x92400e);
     colors.warning_active = c(0x78350f);
+    let table_even = colors.table_even;
+    let table_hover = colors.table_hover;
+    let warning_foreground = colors.warning_foreground;
+    theme.tokens.table = c(0xffffff).into();
+    theme.tokens.table_even = table_even.into();
+    theme.tokens.table_hover = table_hover.into();
+    theme.tokens.table_head = c(0xffffff).into();
+    theme.tokens.table_head_foreground = c(0x111827).into();
+    theme.tokens.table_row_border = c(0xe5e7eb).into();
+    theme.tokens.warning = c(0xb45309).into();
+    theme.tokens.warning_hover = c(0x92400e).into();
+    theme.tokens.warning_active = c(0x78350f).into();
+    theme.tokens.warning_foreground = warning_foreground.into();
+    theme.tokens.button_warning = c(0xb45309).into();
+    theme.tokens.button_warning_hover = c(0x92400e).into();
+    theme.tokens.button_warning_active = c(0x78350f).into();
+    theme.tokens.button_warning_foreground = warning_foreground.into();
     theme.radius = px(6.);
 }
 

@@ -1,15 +1,16 @@
 use crate::app::AppState;
 use crate::blackboard::Replay;
 use crate::share::Share;
-use crate::ui::measured_text_width;
+use crate::ui::{measured_text_width, BG};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::scroll::{Scrollbar, ScrollbarMode};
 use gpui_component::table::{Column, DataTable, TableDelegate, TableState};
 use gpui_component::{ActiveTheme as _, Disableable as _, Sizable as _};
+use gpui_kit::base::RoundedFrameCover;
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    div, px, AnyElement, App, Context, Edges, ElementId, Entity, IntoElement, Pixels, WeakEntity,
-    Window,
+    div, px, AnyElement, App, Context, Div, Edges, ElementId, Entity, Hsla, IntoElement, Pixels,
+    Stateful, WeakEntity, Window,
 };
 
 pub(crate) fn cell_padding() -> Edges<Pixels> {
@@ -42,7 +43,6 @@ pub(crate) struct CourseReplayDelegate {
     title_width: f32,
     time_width: f32,
     room_width: f32,
-    button_width: f32,
     action_width: f32,
     view: WeakEntity<AppState>,
 }
@@ -61,17 +61,18 @@ impl CourseReplayDelegate {
             .iter()
             .map(|row| text_width(window, &room_text(&row.room)))
             .fold(0.0f32, f32::max);
+        let title_width = rows
+            .iter()
+            .map(|row| text_width(window, &row.sub_title))
+            .fold(0.0f32, f32::max)
+            .max(160.0);
         let button_width = button_width(window, &["预览", "继续下载"]);
         let action_width = button_width * 2.0 + 8.0 + 40.0;
-        let viewport = f32::from(window.viewport_size().width);
-        let title_width =
-            (viewport - 300.0 - time_width - room_width - action_width - 64.0).max(160.0);
         Self {
             rows,
             title_width,
             time_width,
             room_width,
-            button_width,
             action_width,
             view,
         }
@@ -114,6 +115,20 @@ impl TableDelegate for CourseReplayDelegate {
             .child(name)
     }
 
+    fn render_tr(
+        &mut self,
+        row_ix: usize,
+        _window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> Stateful<Div> {
+        let row = div().id(("row", row_ix));
+        if row_ix % 2 == 1 {
+            row.bg(cx.theme().tokens.table_even)
+        } else {
+            row
+        }
+    }
+
     fn render_td(
         &mut self,
         row_ix: usize,
@@ -127,17 +142,26 @@ impl TableDelegate for CourseReplayDelegate {
         match col_ix {
             0 => div()
                 .w_full()
+                .h_full()
+                .flex()
+                .items_center()
                 .truncate()
                 .child(replay.sub_title.clone())
                 .into_any_element(),
             1 => div()
                 .w_full()
+                .h_full()
+                .flex()
+                .items_center()
                 .truncate()
                 .text_color(cx.theme().muted_foreground)
                 .child(time_text(&replay))
                 .into_any_element(),
             2 => div()
                 .w_full()
+                .h_full()
+                .flex()
+                .items_center()
                 .truncate()
                 .text_color(cx.theme().muted_foreground)
                 .child(room_text(&replay.room))
@@ -165,7 +189,6 @@ impl TableDelegate for CourseReplayDelegate {
                     format!("preview-{}", replay.identity()).into(),
                 ))
                 .label("预览")
-                .w(px(self.button_width))
                 .ghost()
                 .on_click(cx.listener(move |_table, _, _, cx| {
                     let replay = preview_replay.clone();
@@ -176,12 +199,11 @@ impl TableDelegate for CourseReplayDelegate {
                 let mut download = Button::new(ElementId::Name(
                     format!("download-{}", replay.identity()).into(),
                 ))
-                .label(label)
-                .w(px(self.button_width));
+                .label(label);
                 download = match tone {
                     "success" => download.success().disabled(true),
                     "warning" => download.warning().disabled(true),
-                    _ => download.primary(),
+                    _ => download,
                 };
                 let download = download.on_click(cx.listener(move |_table, _, window, cx| {
                     let replay = download_replay.clone();
@@ -194,7 +216,7 @@ impl TableDelegate for CourseReplayDelegate {
                     .h_full()
                     .flex()
                     .items_center()
-                    .justify_end()
+                    .justify_center()
                     .gap_2()
                     .child(preview)
                     .child(download)
@@ -209,7 +231,6 @@ pub(crate) struct PlazaReplayDelegate {
     title_width: f32,
     time_width: f32,
     room_width: f32,
-    button_width: f32,
     action_width: f32,
     view: WeakEntity<AppState>,
 }
@@ -228,6 +249,11 @@ impl PlazaReplayDelegate {
             .iter()
             .map(|row| text_width(window, &room_text(&row.room)))
             .fold(0.0f32, f32::max);
+        let title_width = rows
+            .iter()
+            .map(|row| text_width(window, &row.replay_title))
+            .fold(0.0f32, f32::max)
+            .max(160.0);
         let button_width = button_width(window, &["预览", "下载", "复制链接"]);
         let downloads_width = rows
             .iter()
@@ -235,15 +261,11 @@ impl PlazaReplayDelegate {
             .fold(0.0f32, f32::max);
         let action_width =
             downloads_width + button_width * 3.0 + 8.0 * 3.0 + 40.0;
-        let viewport = f32::from(window.viewport_size().width);
-        let title_width =
-            (viewport - 300.0 - time_width - room_width - action_width - 64.0).max(160.0);
         Self {
             rows,
             title_width,
             time_width,
             room_width,
-            button_width,
             action_width,
             view,
         }
@@ -286,6 +308,20 @@ impl TableDelegate for PlazaReplayDelegate {
             .child(name)
     }
 
+    fn render_tr(
+        &mut self,
+        row_ix: usize,
+        _window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> Stateful<Div> {
+        let row = div().id(("row", row_ix));
+        if row_ix % 2 == 1 {
+            row.bg(cx.theme().tokens.table_even)
+        } else {
+            row
+        }
+    }
+
     fn render_td(
         &mut self,
         row_ix: usize,
@@ -299,17 +335,26 @@ impl TableDelegate for PlazaReplayDelegate {
         match col_ix {
             0 => div()
                 .w_full()
+                .h_full()
+                .flex()
+                .items_center()
                 .truncate()
                 .child(share.replay_title.clone())
                 .into_any_element(),
             1 => div()
                 .w_full()
+                .h_full()
+                .flex()
+                .items_center()
                 .truncate()
                 .text_color(cx.theme().muted_foreground)
                 .child(share_time_text(&share))
                 .into_any_element(),
             2 => div()
                 .w_full()
+                .h_full()
+                .flex()
+                .items_center()
                 .truncate()
                 .text_color(cx.theme().muted_foreground)
                 .child(room_text(&share.room))
@@ -322,7 +367,6 @@ impl TableDelegate for PlazaReplayDelegate {
                     format!("plaza-preview-{}", share.id).into(),
                 ))
                 .label("预览")
-                .w(px(self.button_width))
                 .ghost()
                 .on_click(cx.listener(move |_table, _, _, cx| {
                     let share = preview_share.clone();
@@ -335,8 +379,7 @@ impl TableDelegate for PlazaReplayDelegate {
                     format!("plaza-download-{}", share.id).into(),
                 ))
                 .label("下载")
-                .w(px(self.button_width))
-                .primary()
+                //.primary()
                 .disabled(download_disabled)
                 .on_click(cx.listener(move |_table, _, window, cx| {
                     let share = download_share.clone();
@@ -350,7 +393,6 @@ impl TableDelegate for PlazaReplayDelegate {
                     format!("plaza-copy-{}", share.id).into(),
                 ))
                 .label("复制链接")
-                .w(px(self.button_width))
                 .ghost()
                 .disabled(copy_url.is_empty())
                 .on_click(cx.listener(move |_table, _, _, cx| {
@@ -362,7 +404,7 @@ impl TableDelegate for PlazaReplayDelegate {
                     .h_full()
                     .flex()
                     .items_center()
-                    .justify_end()
+                    .justify_center()
                     .gap_2()
                     .child(
                         div()
@@ -387,9 +429,9 @@ pub(crate) fn course_table_element(
     let table = DataTable::new(state)
         .bordered(false)
         .stripe(false)
-        .header_row_height(px(26.0))
+        .header_row_height(px(42.0))
         .scrollbar_visible(true, false)
-        .large();
+        .with_size(px(48.0));
     div()
         .size_full()
         .flex()
@@ -398,11 +440,18 @@ pub(crate) fn course_table_element(
             div()
                 .flex_1()
                 .min_h_0()
+                .mx_2()
+                .relative()
                 .overflow_hidden()
-                .child(table),
+                .child(table)
+                .child(
+                    RoundedFrameCover::uniform(px(6.0))
+                        .backdrop(Hsla::from(crate::theme::tone(BG))),
+                ),
         )
         .child(
             div()
+                .mx_2()
                 .h(Scrollbar::width())
                 .flex_none()
                 .child(
@@ -422,9 +471,9 @@ pub(crate) fn plaza_table_element(
     let table = DataTable::new(state)
         .bordered(false)
         .stripe(false)
-        .header_row_height(px(26.0))
+        .header_row_height(px(42.0))
         .scrollbar_visible(true, false)
-        .large();
+        .with_size(px(48.0));
     div()
         .size_full()
         .flex()
@@ -433,11 +482,18 @@ pub(crate) fn plaza_table_element(
             div()
                 .flex_1()
                 .min_h_0()
+                .mx_2()
+                .relative()
                 .overflow_hidden()
-                .child(table),
+                .child(table)
+                .child(
+                    RoundedFrameCover::uniform(px(6.0))
+                        .backdrop(Hsla::from(crate::theme::tone(BG))),
+                ),
         )
         .child(
             div()
+                .mx_2()
                 .h(Scrollbar::width())
                 .flex_none()
                 .child(

@@ -1,7 +1,7 @@
 use crate::app::{AppState, SidebarSection, Tab};
 use crate::smooth_scroll::SmoothTarget;
 use crate::theme::tone;
-use crate::ui::{subtitle, title, BORDER, DANGER, MUTED, PANEL, PRIMARY, PRIMARY_SOFT, SUCCESS, TEXT};
+use crate::ui::{detail, title, BORDER, DANGER, MUTED, PANEL, PRIMARY, PRIMARY_SOFT, SUCCESS, TEXT};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::spinner::Spinner;
 use gpui_component::Disableable as _;
@@ -191,6 +191,7 @@ impl AppState {
                     .flex()
                     .flex_1()
                     .min_h_0()
+                    .ml_2()
                     .overflow_hidden()
                     .child(viewport)
                     .child(crate::ui_scroll::uniform_rail(
@@ -206,15 +207,15 @@ impl AppState {
         div()
             .id("sidebar-plaza")
             .h(px(40.0))
-            .w_full()
+            .flex_1()
             .flex_none()
             .px_4()
+            .m_2()
             .flex()
             .items_center()
             .gap_2()
             .cursor_pointer()
-            .border_b_1()
-            .border_color(tone(BORDER))
+            .rounded_sm()
             .when(selected, |this| this.bg(tone(PRIMARY_SOFT)))
             .when(!selected, |this| this.hover(|style| style.bg(tone(0xf1f5f9))))
             .on_click(cx.listener(|this, _, window, cx| {
@@ -259,7 +260,7 @@ impl AppState {
                             .rounded_full()
                             .bg(tone(if logged_in { SUCCESS } else { MUTED })),
                     )
-                    .child(subtitle(if logged_in { "已登录" } else { "未登录" })),
+                    .child(detail(if logged_in { "已登录" } else { "未登录" })),
             )
             .child(
                 {
@@ -295,6 +296,8 @@ impl AppState {
                     .id(ElementId::Name(format!("section-{label}").into()))
                     .h(px(40.0))
                     .w_full()
+                    .m_2()
+                    .rounded_sm()
                     .flex_none()
                     .pl_3()
                     .pr_3()
@@ -311,11 +314,13 @@ impl AppState {
                             .flex_1()
                             .min_w_0()
                             .truncate()
+                            .m_2()
+                            .rounded_sm()
                             .text_sm()
                             .text_color(tone(MUTED))
                             .child(label),
                     )
-                    .child(subtitle(format!("{count}")))
+                    .child(detail(format!("{count}")))
                     .child(
                         div().pl_2().text_color(tone(MUTED)).child(if *collapsed {
                             IconName::ChevronRight
@@ -335,6 +340,8 @@ impl AppState {
                     .id(ElementId::Name(format!("term-{term}").into()))
                     .h(px(36.0))
                     .w_full()
+                    .m_2()
+                    .rounded_sm()
                     .flex_none()
                     .pl_6()
                     .pr_4()
@@ -355,7 +362,7 @@ impl AppState {
                             .text_color(tone(TEXT))
                             .child(term.clone()),
                     )
-                    .child(subtitle(format!("{count}")))
+                    .child(detail(format!("{count}")))
                     .child(
                         div().pl_2().text_color(tone(MUTED)).child(if *collapsed {
                             IconName::ChevronRight
@@ -407,6 +414,8 @@ impl AppState {
             .id(id)
             .h(px(36.0))
             .w_full()
+            .m_2()
+            .rounded_sm()
             .flex_none()
             .pl(px(40.0))
             .pr_4()
@@ -489,7 +498,7 @@ impl AppState {
             .gap_3()
             .child(title(name));
         if !meta.is_empty() {
-            title_block = title_block.child(subtitle(meta.join(" · ")));
+            title_block = title_block.child(detail(meta.join(" · ")));
         }
         let name_for_download = self.favorite_selected.clone().unwrap_or_default();
 
@@ -516,7 +525,7 @@ impl AppState {
                             .items_center()
                             .gap_3()
                             .child(title_block)
-                            .child(subtitle(format!("{count} 条回放"))),
+                            .child(detail(format!("{count} 条回放"))),
                     )
                     .child(
                         div()
@@ -557,7 +566,7 @@ impl AppState {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .child(subtitle(if self.busy {
+                        .child(detail(if self.busy {
                             "正在加载收藏回放…"
                         } else {
                             "该收藏课程暂时没有可下载的回放。"
@@ -574,7 +583,7 @@ impl AppState {
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(subtitle("请选择左侧课程"));
+                .child(detail("请选择左侧课程"));
         };
         let replays = self.replays.clone();
         let course_name = course.name.clone();
@@ -599,7 +608,7 @@ impl AppState {
             .gap_1()
             .child(title(course_name));
         if !term.is_empty() {
-            title_block = title_block.child(subtitle(term));
+            title_block = title_block.child(detail(term));
         }
 
         div()
@@ -617,8 +626,6 @@ impl AppState {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .border_b_1()
-                    .border_color(tone(BORDER))
                     .child(title_block)
                     .child(
                         div()
@@ -670,7 +677,7 @@ impl AppState {
                         .justify_center()
                         .gap_2()
                         .child(Spinner::new().small())
-                        .child(subtitle(self.replays_loading_label.clone())),
+                        .child(detail(self.replays_loading_label.clone())),
                 )
             })
             .when(!self.replays_loading && self.replays.is_empty(), |this| {

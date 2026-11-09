@@ -1,7 +1,7 @@
 use crate::app::AppState;
 use crate::smooth_scroll::{SmoothTarget, SmoothWheel};
 use crate::theme::tone;
-use crate::ui::{subtitle, title, BORDER, PANEL, PRIMARY};
+use crate::ui::{detail, title, BORDER, PANEL, PRIMARY};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::select::Select;
 use gpui_component::IconName;
@@ -99,7 +99,7 @@ impl AppState {
                                     .justify_center()
                                     .gap_2()
                                     .child(Spinner::new().small())
-                                    .child(subtitle("加载更多…"))
+                                    .child(detail("加载更多…"))
                                     .into_any_element(),
                                 Some(PlazaFooter::LoadMore) => div()
                                     .h(px(52.0))
@@ -121,7 +121,7 @@ impl AppState {
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .child(subtitle(format!("已加载全部 {total} 门课程")))
+                                    .child(detail(format!("已加载全部 {total} 门课程")))
                                     .into_any_element(),
                                 None => div().into_any_element(),
                             }
@@ -238,7 +238,7 @@ impl AppState {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .child(subtitle("广场暂时没有分享。可在“课程”里点击“发布到广场”。")),
+                        .child(detail("广场暂时没有分享。可在“课程”里点击“发布到广场”。")),
                 )
             })
             .when(self.plaza_scrolled, |this| {
@@ -335,13 +335,13 @@ impl AppState {
                     ),
             );
         if !meta.is_empty() {
-            card = card.child(subtitle(meta.join(" · ")).truncate().flex_shrink_0());
+            card = card.child(detail(meta.join(" · ")).truncate().flex_shrink_0());
         }
         if !details.is_empty() {
-            card = card.child(subtitle(details.join(" · ")).truncate().flex_shrink_0());
+            card = card.child(detail(details.join(" · ")).truncate().flex_shrink_0());
         }
         card.child(
-            subtitle(format!("{} 条回放", course.count)).flex_shrink_0(),
+            detail(format!("{} 条回放", course.count)).flex_shrink_0(),
         )
         .into_any_element()
     }
@@ -389,11 +389,10 @@ impl AppState {
                     .h(px(64.0))
                     .flex_none()
                     .px_5()
+                    .py_4()
                     .flex()
                     .items_center()
                     .justify_between()
-                    .border_b_1()
-                    .border_color(tone(BORDER))
                     .child(
                         div()
                             .flex()
@@ -408,12 +407,12 @@ impl AppState {
                                     .child(
                                         div()
                                             .flex_none()
-                                            .child(subtitle(format!("{} 条回放", course.count))),
+                                            .child(detail(format!("{} 条回放", course.count))),
                                     ),
                             )
                             .when(!meta.is_empty(), |this| {
                                 this.child(
-                                    subtitle(meta.join(" · ")).truncate().flex_shrink_0(),
+                                    detail(meta.join(" · ")).truncate().flex_shrink_0(),
                                 )
                             }),
                     )
@@ -463,7 +462,7 @@ impl AppState {
                         .justify_center()
                         .gap_2()
                         .child(Spinner::new().small())
-                        .child(subtitle("正在加载回放…")),
+                        .child(detail("正在加载回放…")),
                 )
             })
             .when(!self.plaza_detail_loading && count == 0, |this| {
@@ -474,7 +473,7 @@ impl AppState {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .child(subtitle("该课程暂时没有可下载的回放。")),
+                        .child(detail("该课程暂时没有可下载的回放。")),
                 )
             })
     }

@@ -32,6 +32,8 @@ fn main() {
         .run(|cx| {
             gpui_kit::init(cx);
             crate::theme::apply(&crate::config::AppConfig::load().theme, cx);
+            #[cfg(feature = "devtools")]
+            gpui_devtools::init(cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                     point(px(120.0), px(70.0)),
