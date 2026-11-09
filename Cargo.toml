@@ -1,6 +1,6 @@
 [package]
 name = "course-share"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 description = "PKU teaching-network replay browser and sharing plaza"
 license = "MIT"
